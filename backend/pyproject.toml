@@ -1,0 +1,17 @@
+[project]
+name = "qatar-real-estate-bot"
+version = "0.1.0"
+dependencies = [
+    "fastapi",
+    "groq",
+    "httpx",
+    "supabase",
+    "python-dotenv",
+    "pydantic",
+    "python-multipart"
+]
+
+[dependency-groups]
+dev = [
+    "workers-py"
+]
