@@ -18,6 +18,7 @@ export default function DashboardPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedLead, setSelectedLead] = useState<any>(null);
   const [activeNav, setActiveNav] = useState('Dashboard');
+  const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState([
     { label: 'Total Leads', value: '0', icon: Users },
     { label: 'New Today', value: '0', icon: TrendingUp },
@@ -42,6 +43,7 @@ export default function DashboardPage() {
   }, []);
 
   async function fetchLeads() {
+    setLoading(true);
     const { data, error } = await supabase
       .from('leads')
       .select('*')
@@ -61,6 +63,9 @@ export default function DashboardPage() {
         { label: 'Booked Calls', value: booked.toString(), icon: Calendar },
         { label: 'Active Chats', value: total > 0 ? '1' : '0', icon: MessageSquare },
       ]);
+    }
+    setLoading(false);
+  }
   const filteredLeads = leads.filter(lead =>
     (lead.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
     (lead.sender_id || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -127,6 +132,20 @@ export default function DashboardPage() {
                 width: '300px'
               }} 
             />
+            <button 
+              onClick={fetchLeads}
+              style={{ 
+                marginLeft: '1rem', 
+                background: '#c5a059', 
+                color: 'black', 
+                border: 'none', 
+                padding: '0.75rem 1rem', 
+                borderRadius: '8px',
+                cursor: 'pointer'
+              }}
+            >
+              Refresh
+            </button>
           </div>
         </header>
 
@@ -159,7 +178,13 @@ export default function DashboardPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredLeads.length > 0 ? (
+              {loading ? (
+                <tr>
+                  <td colSpan={5} style={{ textAlign: 'center', padding: '3rem', color: '#888' }}>
+                    Loading leads...
+                  </td>
+                </tr>
+              ) : filteredLeads.length > 0 ? (
                 filteredLeads.map((lead) => (
                   <tr key={lead.id} onClick={() => setSelectedLead(lead)} style={{ cursor: 'pointer' }}>
                     <td style={{ fontWeight: '500' }}>{lead.name || 'Anonymous'}</td>
