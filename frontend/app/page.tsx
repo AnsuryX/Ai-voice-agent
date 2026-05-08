@@ -15,6 +15,9 @@ import { supabase } from '../utils/supabase';
 
 export default function DashboardPage() {
   const [leads, setLeads] = useState<any[]>([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedLead, setSelectedLead] = useState<any>(null);
+  const [activeNav, setActiveNav] = useState('Dashboard');
   const [stats, setStats] = useState([
     { label: 'Total Leads', value: '0', icon: Users },
     { label: 'New Today', value: '0', icon: TrendingUp },
@@ -58,29 +61,31 @@ export default function DashboardPage() {
         { label: 'Booked Calls', value: booked.toString(), icon: Calendar },
         { label: 'Active Chats', value: total > 0 ? '1' : '0', icon: MessageSquare },
       ]);
-    }
-  }
-
-  return (
+  const filteredLeads = leads.filter(lead =>
+    (lead.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (lead.sender_id || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (lead.area || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (lead.intent || '').toLowerCase().includes(searchTerm.toLowerCase())
+  );
     <div className="dashboard-container">
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="sidebar-logo">REEM AI</div>
         
         <nav style={{ flex: 1 }}>
-          <a href="#" className="nav-item active">
+          <a href="#" className={`nav-item ${activeNav === 'Dashboard' ? 'active' : ''}`} onClick={() => setActiveNav('Dashboard')}>
             <LayoutDashboard size={20} />
             <span>Dashboard</span>
           </a>
-          <a href="#" className="nav-item">
+          <a href="#" className={`nav-item ${activeNav === 'Leads' ? 'active' : ''}`} onClick={() => setActiveNav('Leads')}>
             <Users size={20} />
             <span>Leads</span>
           </a>
-          <a href="#" className="nav-item">
+          <a href="#" className={`nav-item ${activeNav === 'Appointments' ? 'active' : ''}`} onClick={() => setActiveNav('Appointments')}>
             <Calendar size={20} />
             <span>Appointments</span>
           </a>
-          <a href="#" className="nav-item">
+          <a href="#" className={`nav-item ${activeNav === 'Chat History' ? 'active' : ''}`} onClick={() => setActiveNav('Chat History')}>
             <MessageSquare size={20} />
             <span>Chat History</span>
           </a>
@@ -111,6 +116,8 @@ export default function DashboardPage() {
             <input 
               type="text" 
               placeholder="Search leads..." 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
               style={{ 
                 background: '#1a1a1a', 
                 border: '1px solid #333', 
@@ -152,9 +159,9 @@ export default function DashboardPage() {
               </tr>
             </thead>
             <tbody>
-              {leads.length > 0 ? (
-                leads.map((lead) => (
-                  <tr key={lead.id}>
+              {filteredLeads.length > 0 ? (
+                filteredLeads.map((lead) => (
+                  <tr key={lead.id} onClick={() => setSelectedLead(lead)} style={{ cursor: 'pointer' }}>
                     <td style={{ fontWeight: '500' }}>{lead.name || 'Anonymous'}</td>
                     <td style={{ color: '#888' }}>{lead.sender_id}</td>
                     <td>{lead.area || 'Pending...'}</td>
@@ -167,13 +174,54 @@ export default function DashboardPage() {
               ) : (
                 <tr>
                   <td colSpan={5} style={{ textAlign: 'center', padding: '3rem', color: '#888' }}>
-                    No leads yet. Send a message to your WhatsApp bot to see them appear here in real-time!
+                    {leads.length > 0 ? 'No leads match your search.' : 'No leads yet. Send a message to your WhatsApp bot to see them appear here in real-time!'}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
+
+        {/* Lead Details */}
+        {selectedLead && (
+          <div className="lead-details">
+            <h3>Lead Details</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+              <div>
+                <strong>Name:</strong> {selectedLead.name || 'Anonymous'}
+              </div>
+              <div>
+                <strong>Phone ID:</strong> {selectedLead.sender_id}
+              </div>
+              <div>
+                <strong>Area:</strong> {selectedLead.area || 'Not specified'}
+              </div>
+              <div>
+                <strong>Intent:</strong> {selectedLead.intent || 'Analyzing'}
+              </div>
+              <div>
+                <strong>Status:</strong> {selectedLead.status}
+              </div>
+              <div>
+                <strong>Created:</strong> {new Date(selectedLead.created_at).toLocaleString()}
+              </div>
+            </div>
+            <button 
+              onClick={() => setSelectedLead(null)}
+              style={{ 
+                marginTop: '1rem', 
+                background: '#c5a059', 
+                color: 'black', 
+                border: 'none', 
+                padding: '0.5rem 1rem', 
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              Close Details
+            </button>
+          </div>
+        )}
       </main>
     </div>
   );

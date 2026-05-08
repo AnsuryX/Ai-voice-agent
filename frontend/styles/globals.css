@@ -130,3 +130,16 @@ body {
   color: var(--primary);
   border: 1px solid var(--primary);
 }
+
+.lead-details {
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-top: 2rem;
+}
+
+.lead-details h3 {
+  margin-bottom: 1rem;
+  color: var(--primary);
+}
