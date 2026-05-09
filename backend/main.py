@@ -1,6 +1,8 @@
 import os
 import json
 import httpx
+import re
+from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -29,6 +31,7 @@ app.add_middleware(
 from orchestrator import AIOrchestrator
 from database import LeadManager
 from flow_engine import FlowEngine
+from booking import BookingManager
 from pydantic import BaseModel
 from typing import Optional
 
@@ -36,6 +39,7 @@ from typing import Optional
 orchestrator = None
 lead_manager = None
 flow_engine = None
+booking_manager = None
 
 class MessageRequest(BaseModel):
     recipient_number: str
@@ -43,13 +47,72 @@ class MessageRequest(BaseModel):
     media_url: Optional[str] = None
     media_type: Optional[str] = "text"
 
+
+class ContactRequest(BaseModel):
+    sender_id: str
+    name: Optional[str] = None
+    intent: Optional[str] = None
+    area: Optional[str] = None
+    status: Optional[str] = "Contact"
+
+
+class ContactUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    intent: Optional[str] = None
+    area: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+    tags: Optional[list[str]] = None
+    assignee: Optional[str] = None
+
+
+class BulkActionRequest(BaseModel):
+    sender_ids: list[str]
+    action: str
+    value: Optional[str] = None
+
+
+class FlowCreateRequest(BaseModel):
+    name: str
+    nodes: Optional[list] = None
+    is_active: Optional[bool] = True
+
+
+DEFAULT_FLOWS = [
+    {
+        "name": "Property Qualification Flow",
+        "nodes": [
+            {"type": "question", "key": "intent", "text": "Are you looking to buy, rent, or sell?"},
+            {"type": "question", "key": "area", "text": "Which area in Qatar are you interested in?"},
+            {"type": "question", "key": "budget", "text": "What budget range are you considering?"},
+        ],
+        "is_active": True,
+    },
+    {
+        "name": "Call Booking Flow",
+        "nodes": [
+            {"type": "intent", "match": "call"},
+            {"type": "question", "key": "email", "text": "Please share your email to schedule your call."},
+        ],
+        "is_active": True,
+    },
+    {
+        "name": "Visit Booking Flow",
+        "nodes": [
+            {"type": "intent", "match": "visit"},
+            {"type": "question", "key": "email", "text": "Please share your email to schedule your property visit."},
+        ],
+        "is_active": True,
+    },
+]
+
 def get_config(key, env=None):
     if env and hasattr(env, key):
         return getattr(env, key)
     return os.getenv(key)
 
 def init_services(env=None):
-    global orchestrator, lead_manager, flow_engine
+    global orchestrator, lead_manager, flow_engine, booking_manager
     if orchestrator is None:
         orchestrator = AIOrchestrator(api_key=get_config("GROQ_API_KEY", env))
     if lead_manager is None:
@@ -59,6 +122,42 @@ def init_services(env=None):
         )
     if flow_engine is None:
         flow_engine = FlowEngine(lead_manager)
+    if booking_manager is None:
+        booking_manager = BookingManager()
+
+
+def detect_booking_type(user_text: str):
+    if not user_text:
+        return None
+    lower = user_text.lower()
+    if any(k in lower for k in ["visit", "viewing", "tour", "property visit"]):
+        return "visit"
+    if any(k in lower for k in ["call", "phone call", "meeting", "book"]):
+        return "call"
+    return None
+
+
+def extract_email(user_text: str):
+    if not user_text:
+        return None
+    match = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", user_text)
+    return match.group(0) if match else None
+
+
+async def try_create_cal_booking(email: str, booking_type: str):
+    event_key = "CAL_CALL_EVENT_TYPE_ID" if booking_type == "call" else "CAL_VISIT_EVENT_TYPE_ID"
+    event_type_id = os.getenv(event_key) or os.getenv("CAL_DEFAULT_EVENT_TYPE_ID")
+    if not event_type_id:
+        return None, f"Missing {event_key}"
+
+    now_utc = datetime.now(timezone.utc)
+    start_utc = (now_utc + timedelta(days=1)).replace(hour=7, minute=0, second=0, microsecond=0)
+    result = await booking_manager.create_booking(
+        attendee_email=email,
+        start_time=start_utc.isoformat(),
+        event_type_id=int(event_type_id),
+    )
+    return result, None
 
 async def send_whatsapp_message(recipient_number: str, message_text: str = None, media_url: str = None, media_type: str = "text", env=None):
     phone_id = get_config("WHATSAPP_PHONE_ID", env)
@@ -114,6 +213,97 @@ async def manual_send_message(req: MessageRequest, request: Request):
     
     return {"status": "sent"}
 
+
+@app.get("/api/contacts")
+async def list_contacts(request: Request):
+    env = getattr(request.state, "env", None)
+    init_services(env)
+    result = lead_manager.supabase.table("leads").select("*").order("created_at", desc=True).execute()
+    return result.data or []
+
+
+@app.post("/api/contacts")
+async def create_contact(req: ContactRequest, request: Request):
+    env = getattr(request.state, "env", None)
+    init_services(env)
+    await lead_manager.update_lead(
+        sender_id=req.sender_id,
+        name=req.name,
+        intent=req.intent,
+        area=req.area,
+        status=req.status,
+    )
+    await lead_manager.update_lead(sender_id=req.sender_id, flow_context={"notes": "", "tags": [], "assignee": ""})
+    return {"status": "created"}
+
+
+@app.patch("/api/contacts/{sender_id}")
+async def update_contact(sender_id: str, req: ContactUpdateRequest, request: Request):
+    env = getattr(request.state, "env", None)
+    init_services(env)
+    existing = await lead_manager.get_lead(sender_id) or {}
+    context = existing.get("flow_context") or {}
+    if req.notes is not None:
+        context["notes"] = req.notes
+    if req.tags is not None:
+        context["tags"] = req.tags
+    if req.assignee is not None:
+        context["assignee"] = req.assignee
+
+    await lead_manager.update_lead(
+        sender_id=sender_id,
+        name=req.name,
+        intent=req.intent,
+        area=req.area,
+        status=req.status,
+        flow_context=context,
+    )
+    return {"status": "updated"}
+
+
+@app.post("/api/contacts/bulk")
+async def bulk_update_contacts(req: BulkActionRequest, request: Request):
+    env = getattr(request.state, "env", None)
+    init_services(env)
+    for sender_id in req.sender_ids:
+        lead = await lead_manager.get_lead(sender_id) or {}
+        context = lead.get("flow_context") or {}
+        if req.action == "status":
+            await lead_manager.update_lead(sender_id=sender_id, status=req.value or "Contact")
+        elif req.action == "assignee":
+            context["assignee"] = req.value or ""
+            await lead_manager.update_lead(sender_id=sender_id, flow_context=context)
+        elif req.action == "add_tag":
+            tags = context.get("tags") or []
+            if req.value and req.value not in tags:
+                tags.append(req.value)
+            context["tags"] = tags
+            await lead_manager.update_lead(sender_id=sender_id, flow_context=context)
+    return {"status": "bulk-updated"}
+
+
+@app.get("/api/flows")
+async def list_flows(request: Request):
+    env = getattr(request.state, "env", None)
+    init_services(env)
+    result = lead_manager.supabase.table("flows").select("*").order("created_at", desc=True).execute()
+    if not result.data:
+        lead_manager.supabase.table("flows").insert(DEFAULT_FLOWS).execute()
+        result = lead_manager.supabase.table("flows").select("*").order("created_at", desc=True).execute()
+    return result.data or []
+
+
+@app.post("/api/flows")
+async def create_flow(req: FlowCreateRequest, request: Request):
+    env = getattr(request.state, "env", None)
+    init_services(env)
+    lead_manager.supabase.table("flows").insert({
+        "name": req.name,
+        "nodes": req.nodes or [],
+        "is_active": req.is_active,
+    }).execute()
+    return {"status": "created"}
+
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     params = request.query_params
@@ -138,8 +328,7 @@ async def handle_webhook(request: Request):
             for change in entry.get("changes", []):
                 value = change.get("value", {})
                 messages = value.get("messages", [])
-                if messages:
-                    msg = messages[0]
+                for msg in messages:
                     sender_id = msg.get("from")
                     msg_type = msg.get("type")
                     
@@ -157,14 +346,48 @@ async def handle_webhook(request: Request):
                         user_text = msg[msg_type].get("caption")
                         media_url = f"https://whatsapp-media-placeholder.com/{media_id}"
 
-                    # Save incoming message
-                    await lead_manager.save_message(sender_id, user_text, "user", media_url, media_type)
-                    
                     # Get lead data for context
                     lead_data = await lead_manager.get_lead(sender_id)
                     if not lead_data:
                         await lead_manager.update_lead(sender_id)
                         lead_data = {"sender_id": sender_id}
+
+                    # Save incoming message
+                    await lead_manager.save_message(sender_id, user_text, "user", media_url, media_type)
+
+                    booking_type = detect_booking_type(user_text or "")
+                    if booking_type:
+                        await lead_manager.update_lead(
+                            sender_id=sender_id,
+                            flow_state="awaiting_booking_email",
+                            flow_context={"booking_type": booking_type},
+                            status="Booking Requested",
+                        )
+                        response_text = "Perfect. Please share your email so I can book your " + booking_type + "."
+                        await lead_manager.save_message(sender_id, response_text, "assistant")
+                        await send_whatsapp_message(sender_id, response_text, env=env)
+                        continue
+
+                    if lead_data.get("flow_state") == "awaiting_booking_email":
+                        email = extract_email(user_text or "")
+                        if not email:
+                            response_text = "Please share a valid email address so I can complete the booking."
+                            await lead_manager.save_message(sender_id, response_text, "assistant")
+                            await send_whatsapp_message(sender_id, response_text, env=env)
+                            continue
+
+                        booking_type = (lead_data.get("flow_context") or {}).get("booking_type", "call")
+                        booking, booking_error = await try_create_cal_booking(email, booking_type)
+                        if booking_error:
+                            response_text = "I captured your request, but booking config is incomplete. Please contact support."
+                        elif booking and booking.get("status") != "error":
+                            response_text = "Done. Your " + booking_type + " has been booked. We will share details shortly."
+                            await lead_manager.update_lead(sender_id, status="Booked", flow_state="", flow_context={})
+                        else:
+                            response_text = "I couldn't finalize booking automatically. Please try again in a moment."
+                        await lead_manager.save_message(sender_id, response_text, "assistant")
+                        await send_whatsapp_message(sender_id, response_text, env=env)
+                        continue
 
                     # 1. Try Flow Engine
                     response_text = await flow_engine.process_message(sender_id, user_text, lead_data)
