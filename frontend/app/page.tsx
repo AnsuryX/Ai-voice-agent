@@ -22,6 +22,8 @@ import {
 import { supabase } from '../utils/supabase';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://qatar-real-estate-bot.vercel.app';
+const WEBHOOK_URL = process.env.NEXT_PUBLIC_WEBHOOK_URL || `${API_URL}/webhook`;
+const VERIFY_TOKEN_DISPLAY = process.env.NEXT_PUBLIC_WHATSAPP_VERIFY_TOKEN || 'Set in backend env';
 
 const navItems = [
   { id: 'Dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -48,8 +50,8 @@ export default function DashboardPage() {
   const [leadQualification, setLeadQualification] = useState(true);
   const [multimediaHandling, setMultimediaHandling] = useState(true);
   
-  const webhookUrl = 'https://qatar-real-estate-bot.vercel.app/webhook';
-  const verifyToken = 'qatar_re_verify_2026';
+  const webhookUrl = WEBHOOK_URL;
+  const verifyToken = VERIFY_TOKEN_DISPLAY;
 
   // Chat state
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
@@ -69,6 +71,11 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchLeads();
     fetchChatHistory();
+
+    if (!supabase) {
+      setError('Missing Supabase env in frontend deployment. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.');
+      return;
+    }
 
     const leadsSubscription = supabase
       .channel('leads-channel')
@@ -100,6 +107,7 @@ export default function DashboardPage() {
 
   async function fetchLeads() {
     setLoading(true);
+    if (!supabase) return;
     const { data, error } = await supabase
       .from('leads')
       .select('*')
@@ -110,6 +118,7 @@ export default function DashboardPage() {
   }
 
   async function fetchChatHistory() {
+    if (!supabase) return;
     const { data, error } = await supabase
       .from('chat_history')
       .select('*')
