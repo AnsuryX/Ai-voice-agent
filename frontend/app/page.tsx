@@ -21,6 +21,8 @@ import {
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://qatar-real-estate-bot.vercel.app';
+
 const navItems = [
   { id: 'Dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'Conversations', label: 'Conversations', icon: MessageSquare },
@@ -39,6 +41,11 @@ export default function DashboardPage() {
   const [error, setError] = useState('');
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [copyStatus, setCopyStatus] = useState('');
+  
+  // Automation settings
+  const [aiAutoReply, setAiAutoReply] = useState(true);
+  const [leadQualification, setLeadQualification] = useState(true);
+  const [multimediaHandling, setMultimediaHandling] = useState(true);
   
   const webhookUrl = 'https://qatar-real-estate-bot.vercel.app/webhook';
   const verifyToken = 'qatar_re_verify_2026';
@@ -117,7 +124,7 @@ export default function DashboardPage() {
     setMessageInput('');
 
     try {
-      const response = await fetch('/api/send-message', {
+      const response = await fetch(`${API_URL}/api/send-message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -355,7 +362,7 @@ export default function DashboardPage() {
   const checkHealth = async () => {
     setCheckingHealth(true);
     try {
-      const res = await fetch('https://qatar-real-estate-bot.vercel.app/');
+      const res = await fetch(`${API_URL}/`);
       const data = await res.json();
       setHealthStatus({
         status: data.status === 'online' ? 'Healthy' : 'Degraded',
@@ -425,15 +432,57 @@ export default function DashboardPage() {
           <div style={{ display: 'grid', gap: '1rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>AI Auto-Reply (GPT-4o)</span>
-              <button style={{ background: '#4ade80', border: 'none', padding: '4px 12px', borderRadius: '12px', fontSize: '0.7rem', color: 'black', fontWeight: 'bold' }}>Enabled</button>
+              <button 
+                onClick={() => setAiAutoReply(!aiAutoReply)}
+                style={{ 
+                  background: aiAutoReply ? '#4ade80' : '#666', 
+                  border: 'none', 
+                  padding: '4px 12px', 
+                  borderRadius: '12px', 
+                  fontSize: '0.7rem', 
+                  color: 'black', 
+                  fontWeight: 'bold',
+                  cursor: 'pointer'
+                }}
+              >
+                {aiAutoReply ? 'Enabled' : 'Disabled'}
+              </button>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>Lead Qualification Flow</span>
-              <button style={{ background: '#4ade80', border: 'none', padding: '4px 12px', borderRadius: '12px', fontSize: '0.7rem', color: 'black', fontWeight: 'bold' }}>Active</button>
+              <button 
+                onClick={() => setLeadQualification(!leadQualification)}
+                style={{ 
+                  background: leadQualification ? '#4ade80' : '#666', 
+                  border: 'none', 
+                  padding: '4px 12px', 
+                  borderRadius: '12px', 
+                  fontSize: '0.7rem', 
+                  color: 'black', 
+                  fontWeight: 'bold',
+                  cursor: 'pointer'
+                }}
+              >
+                {leadQualification ? 'Active' : 'Inactive'}
+              </button>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>Multimedia Handling</span>
-              <button style={{ background: '#4ade80', border: 'none', padding: '4px 12px', borderRadius: '12px', fontSize: '0.7rem', color: 'black', fontWeight: 'bold' }}>Active</button>
+              <button 
+                onClick={() => setMultimediaHandling(!multimediaHandling)}
+                style={{ 
+                  background: multimediaHandling ? '#4ade80' : '#666', 
+                  border: 'none', 
+                  padding: '4px 12px', 
+                  borderRadius: '12px', 
+                  fontSize: '0.7rem', 
+                  color: 'black', 
+                  fontWeight: 'bold',
+                  cursor: 'pointer'
+                }}
+              >
+                {multimediaHandling ? 'Active' : 'Inactive'}
+              </button>
             </div>
           </div>
         </div>
