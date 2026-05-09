@@ -1,4 +1,2 @@
-{"timestamp":"00:00:03.422","source":"Server","level":"LOG","message":""}
-{"timestamp":"00:01:42.410","source":"Browser","level":"INFO","message":"%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold"}
-{"timestamp":"00:02:00.275","source":"Browser","level":"INFO","message":"%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold"}
-{"timestamp":"00:48:08.377","source":"Server","level":"LOG","message":"✓ Compiled in 162ms"}
+{"timestamp":"00:00:11.974","source":"Server","level":"LOG","message":""}
+{"timestamp":"00:08:45.380","source":"Server","level":"LOG","message":"  Reload env: .env.local"}
