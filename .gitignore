@@ -1,6 +1,26 @@
+# Environment files and secrets
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
 __pycache__/
 *.pyc
-.vercel
+.pytest_cache/
+.mypy_cache/
+
+# Node / frontend
 node_modules/
 dist/
+.next/
+out/
+*.tsbuildinfo
+
+# Vercel
+.vercel/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
