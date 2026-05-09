@@ -84,6 +84,38 @@ class FlowUpdateRequest(BaseModel):
     nodes: Optional[list] = None
     is_active: Optional[bool] = None
 
+
+DEFAULT_FLOWS = [
+    {
+        "name": "Property Qualification Flow",
+        "nodes": [
+            {"type": "question", "key": "intent", "text": "Are you looking to buy, rent, or sell?"},
+            {"type": "question", "key": "area", "text": "Which area in Qatar are you interested in?"},
+            {"type": "question", "key": "budget", "text": "What budget range are you considering?"},
+            {"type": "action", "key": "status", "value": "Qualified"},
+        ],
+        "is_active": True,
+    },
+    {
+        "name": "Call Booking Flow",
+        "nodes": [
+            {"type": "intent", "match": "call"},
+            {"type": "question", "key": "email", "text": "Please share your email to schedule your call."},
+            {"type": "action", "key": "booking_type", "value": "call"},
+        ],
+        "is_active": True,
+    },
+    {
+        "name": "Visit Booking Flow",
+        "nodes": [
+            {"type": "intent", "match": "visit"},
+            {"type": "question", "key": "email", "text": "Please share your email to schedule your property visit."},
+            {"type": "action", "key": "booking_type", "value": "visit"},
+        ],
+        "is_active": True,
+    },
+]
+
 def get_config(key, env=None):
     if env and hasattr(env, key):
         return getattr(env, key)
@@ -125,6 +157,9 @@ def extract_email(user_text: str):
 async def try_create_cal_booking(sender_id: str, email: str, booking_type: str):
     event_key = "CAL_CALL_EVENT_TYPE_ID" if booking_type == "call" else "CAL_VISIT_EVENT_TYPE_ID"
     event_type_id = os.getenv(event_key)
+    if not event_type_id:
+        # Fallback: try default event type id if provided
+        event_type_id = os.getenv("CAL_DEFAULT_EVENT_TYPE_ID")
     if not event_type_id:
         return None, f"Booking requested for {booking_type}, but {event_key} is missing in env."
 
@@ -233,6 +268,12 @@ async def create_contact(req: ContactRequest, request: Request):
     return {"status": "created"}
 
 
+@app.post("/contacts")
+async def create_contact_alias(req: ContactRequest, request: Request):
+    # Backward-compatible alias in case any client uses /contacts directly.
+    return await create_contact(req, request)
+
+
 @app.patch("/api/contacts/{sender_id}")
 async def update_contact(sender_id: str, req: ContactUpdateRequest, request: Request):
     env = getattr(request.state, "env", None)
@@ -288,6 +329,9 @@ async def list_flows(request: Request):
     if not lead_manager or not lead_manager.supabase:
         raise HTTPException(status_code=500, detail="Supabase not configured")
     result = lead_manager.supabase.table("flows").select("*").order("created_at", desc=True).execute()
+    if not result.data:
+        lead_manager.supabase.table("flows").insert(DEFAULT_FLOWS).execute()
+        result = lead_manager.supabase.table("flows").select("*").order("created_at", desc=True).execute()
     return result.data or []
 
 
@@ -304,6 +348,16 @@ async def create_flow(req: FlowCreateRequest, request: Request):
     }
     lead_manager.supabase.table("flows").insert(payload).execute()
     return {"status": "created"}
+
+
+@app.post("/api/flows/seed")
+async def seed_flows(request: Request):
+    env = getattr(request.state, "env", None)
+    init_services(env)
+    if not lead_manager or not lead_manager.supabase:
+        raise HTTPException(status_code=500, detail="Supabase not configured")
+    lead_manager.supabase.table("flows").insert(DEFAULT_FLOWS).execute()
+    return {"status": "seeded"}
 
 
 @app.patch("/api/flows/{flow_id}")
