@@ -18,7 +18,9 @@ import {
   Phone,
   Video,
   ChevronRight,
-  GitBranch
+  GitBranch,
+  Activity,
+  Download
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 
@@ -29,6 +31,7 @@ const VERIFY_TOKEN_DISPLAY = process.env.NEXT_PUBLIC_WHATSAPP_VERIFY_TOKEN || 'S
 const navItems = [
   { id: 'Dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'Contacts', label: 'Contacts', icon: UserPlus },
+  { id: 'Live Monitor', label: 'Live Monitor', icon: Activity },
   { id: 'Conversations', label: 'Conversations', icon: MessageSquare },
   { id: 'Leads', label: 'Leads', icon: Users },
   { id: 'Flows', label: 'Flows', icon: GitBranch },
@@ -71,6 +74,7 @@ export default function DashboardPage() {
   const [flows, setFlows] = useState<any[]>([]);
   const [newFlowName, setNewFlowName] = useState('');
   const [newFlowNodes, setNewFlowNodes] = useState('[]');
+  const [monitorEvents, setMonitorEvents] = useState<any[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   async function copyToClipboard(text: string, label: string) {
@@ -95,14 +99,39 @@ export default function DashboardPage() {
 
     const leadsSubscription = supabase
       .channel('leads-channel')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, (payload) => {
+        const pl: any = payload;
+        setMonitorEvents((prev) => [
+          {
+            table: 'leads',
+            event: pl.eventType,
+            sender_id: pl.new?.sender_id || pl.old?.sender_id || 'unknown',
+            role: 'system',
+            message: `Lead ${String(pl.eventType).toLowerCase()}`,
+            timestamp: new Date().toISOString(),
+          },
+          ...prev,
+        ].slice(0, 200));
         fetchLeads();
       })
       .subscribe();
 
     const chatSubscription = supabase
       .channel('chat-channel')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_history' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_history' }, (payload) => {
+        const pl: any = payload;
+        const newRow: any = pl.new || {};
+        setMonitorEvents((prev) => [
+          {
+            table: 'chat_history',
+            event: pl.eventType,
+            sender_id: newRow.sender_id || 'unknown',
+            role: newRow.role || 'system',
+            message: newRow.message || `[${newRow.media_type || 'message'}]`,
+            timestamp: newRow.created_at || new Date().toISOString(),
+          },
+          ...prev,
+        ].slice(0, 200));
         fetchChatHistory();
       })
       .subscribe();
@@ -177,6 +206,13 @@ export default function DashboardPage() {
       setError('Error sending message. Please try again.');
     }
   };
+
+  const quickReplyTemplates = [
+    'Thanks for contacting REEM AI. Which area in Qatar are you interested in?',
+    'Great choice. What is your budget range?',
+    'Would you like me to book a call with our specialist?',
+    'Please share your email so I can schedule your visit.'
+  ];
 
   const activeMessages = useMemo(() => {
     return chatHistory.filter(m => m.sender_id === activeChatId);
@@ -424,6 +460,17 @@ export default function DashboardPage() {
               </div>
 
               <div className="chat-input-area">
+                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginRight: '0.5rem' }}>
+                  {quickReplyTemplates.map((t, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setMessageInput(t)}
+                      style={{ background: '#1a1a1a', color: '#bbb', border: '1px solid #333', borderRadius: '12px', padding: '0.25rem 0.6rem', fontSize: '0.7rem', cursor: 'pointer' }}
+                    >
+                      Template {idx + 1}
+                    </button>
+                  ))}
+                </div>
                 <button className="icon-button"><Smile size={22} /></button>
                 <button className="icon-button"><Paperclip size={22} /></button>
                 <input 
@@ -493,6 +540,23 @@ export default function DashboardPage() {
       </div>
 
       <div className="stat-card" style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+        <button
+          onClick={() => {
+            const headers = ['name', 'sender_id', 'intent', 'area', 'status', 'created_at'];
+            const rows = leads.map((l) => headers.map((h) => `"${String(l[h] ?? '').replace(/"/g, '""')}"`).join(','));
+            const csv = [headers.join(','), ...rows].join('\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `contacts-${new Date().toISOString().slice(0, 10)}.csv`;
+            link.click();
+            URL.revokeObjectURL(url);
+          }}
+          style={{ background: '#c5a059', color: '#000', border: 'none', borderRadius: '8px', padding: '0.6rem 0.9rem', cursor: 'pointer', fontWeight: 700 }}
+        >
+          <Download size={14} style={{ marginRight: 6, verticalAlign: 'middle' }} /> Export CSV
+        </button>
         <input className="chat-input" placeholder="Bulk status" value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value)} />
         <button onClick={() => runBulkAction('status', bulkStatus)} style={{ background: '#1a1a1a', color: '#fff', border: '1px solid #333', borderRadius: '8px', padding: '0.6rem 0.9rem', cursor: 'pointer' }}>Apply Status</button>
         <input className="chat-input" placeholder="Bulk assignee" value={bulkAssignee} onChange={(e) => setBulkAssignee(e.target.value)} />
@@ -614,6 +678,27 @@ export default function DashboardPage() {
             <div style={{ color: flow.is_active ? '#4ade80' : '#888', fontSize: '0.8rem' }}>{flow.is_active ? 'Active' : 'Inactive'}</div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+
+  const renderLiveMonitor = () => (
+    <div className="leads-table-container" style={{ padding: '1rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <h3>Live Monitor</h3>
+        <div style={{ color: '#888', fontSize: '0.85rem' }}>Inbound events as they arrive</div>
+      </div>
+      <div className="messages-list" style={{ height: '68vh', border: '1px solid #333', borderRadius: '10px', padding: '1rem' }}>
+        {monitorEvents.map((evt, i) => (
+          <div key={i} className={`message-bubble ${evt.role === 'assistant' ? 'assistant' : 'user'}`}>
+            <div style={{ fontSize: '0.75rem', opacity: 0.8, marginBottom: 4 }}>
+              [{evt.table}] {evt.event} • {evt.sender_id}
+            </div>
+            <div>{evt.message}</div>
+            <div className="message-time">{new Date(evt.timestamp).toLocaleString()}</div>
+          </div>
+        ))}
+        {!monitorEvents.length && <div style={{ color: '#888' }}>No events yet. New messages and lead updates will stream here.</div>}
       </div>
     </div>
   );
@@ -756,6 +841,7 @@ export default function DashboardPage() {
     switch (view) {
       case 'Dashboard': return renderDashboard();
       case 'Contacts': return renderContacts();
+      case 'Live Monitor': return renderLiveMonitor();
       case 'Conversations': return renderConversations();
       case 'Leads': return renderLeads();
       case 'Flows': return renderFlows();
