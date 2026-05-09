@@ -59,6 +59,18 @@ export default function DashboardPage() {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [messageInput, setMessageInput] = useState('');
   const [contactForm, setContactForm] = useState({ sender_id: '', name: '', intent: '', area: '' });
+  const [selectedContacts, setSelectedContacts] = useState<string[]>([]);
+  const [activeContactId, setActiveContactId] = useState<string | null>(null);
+  const [contactNotes, setContactNotes] = useState('');
+  const [contactTagsInput, setContactTagsInput] = useState('');
+  const [contactAssignee, setContactAssignee] = useState('');
+  const [contactStatus, setContactStatus] = useState('');
+  const [bulkStatus, setBulkStatus] = useState('Contact');
+  const [bulkAssignee, setBulkAssignee] = useState('');
+  const [bulkTag, setBulkTag] = useState('');
+  const [flows, setFlows] = useState<any[]>([]);
+  const [newFlowName, setNewFlowName] = useState('');
+  const [newFlowNodes, setNewFlowNodes] = useState('[]');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   async function copyToClipboard(text: string, label: string) {
@@ -74,6 +86,7 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchLeads();
     fetchChatHistory();
+    fetchFlows();
 
     if (!supabase) {
       setError('Missing Supabase env in frontend deployment. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.');
@@ -128,6 +141,17 @@ export default function DashboardPage() {
       .order('created_at', { ascending: true });
 
     if (!error) setChatHistory(data || []);
+  }
+
+  async function fetchFlows() {
+    try {
+      const res = await fetch(`${API_URL}/api/flows`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setFlows(data || []);
+    } catch {
+      // noop
+    }
   }
 
   const handleSendMessage = async () => {
@@ -191,11 +215,100 @@ export default function DashboardPage() {
       body: JSON.stringify(contactForm),
     });
     if (!res.ok) {
-      setError('Failed to create contact.');
+      const body = await res.text();
+      setError(`Failed to create contact. ${body}`);
       return;
     }
     setContactForm({ sender_id: '', name: '', intent: '', area: '' });
     fetchLeads();
+  };
+
+  const activeContact = useMemo(
+    () => leads.find((l) => l.sender_id === activeContactId) || null,
+    [leads, activeContactId]
+  );
+
+  useEffect(() => {
+    if (!activeContact) return;
+    const ctx = activeContact.flow_context || {};
+    setContactNotes(ctx.notes || '');
+    setContactAssignee(ctx.assignee || '');
+    setContactTagsInput(((ctx.tags || []) as string[]).join(', '));
+    setContactStatus(activeContact.status || 'Contact');
+  }, [activeContactId, leads]);
+
+  const saveContactProfile = async () => {
+    if (!activeContactId) return;
+    const tags = contactTagsInput
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    const res = await fetch(`${API_URL}/api/contacts/${activeContactId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        status: contactStatus,
+        notes: contactNotes,
+        tags,
+        assignee: contactAssignee,
+      }),
+    });
+    if (!res.ok) {
+      setError('Failed to save contact profile.');
+      return;
+    }
+    fetchLeads();
+  };
+
+  const toggleContactSelection = (senderId: string) => {
+    setSelectedContacts((prev) =>
+      prev.includes(senderId) ? prev.filter((id) => id !== senderId) : [...prev, senderId]
+    );
+  };
+
+  const runBulkAction = async (action: 'status' | 'assignee' | 'add_tag', value: string) => {
+    if (!selectedContacts.length) {
+      setError('Select at least one contact for bulk actions.');
+      return;
+    }
+    const res = await fetch(`${API_URL}/api/contacts/bulk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sender_ids: selectedContacts, action, value }),
+    });
+    if (!res.ok) {
+      setError('Bulk update failed.');
+      return;
+    }
+    setSelectedContacts([]);
+    fetchLeads();
+  };
+
+  const createFlow = async () => {
+    if (!newFlowName.trim()) {
+      setError('Flow name is required.');
+      return;
+    }
+    let nodes = [];
+    try {
+      nodes = JSON.parse(newFlowNodes || '[]');
+      if (!Array.isArray(nodes)) throw new Error('Nodes must be an array');
+    } catch {
+      setError('Flow nodes must be valid JSON array.');
+      return;
+    }
+    const res = await fetch(`${API_URL}/api/flows`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newFlowName, nodes }),
+    });
+    if (!res.ok) {
+      setError('Failed to create flow.');
+      return;
+    }
+    setNewFlowName('');
+    setNewFlowNodes('[]');
+    fetchFlows();
   };
 
   const stats = useMemo(() => {
@@ -379,10 +492,20 @@ export default function DashboardPage() {
         </button>
       </div>
 
+      <div className="stat-card" style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+        <input className="chat-input" placeholder="Bulk status" value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value)} />
+        <button onClick={() => runBulkAction('status', bulkStatus)} style={{ background: '#1a1a1a', color: '#fff', border: '1px solid #333', borderRadius: '8px', padding: '0.6rem 0.9rem', cursor: 'pointer' }}>Apply Status</button>
+        <input className="chat-input" placeholder="Bulk assignee" value={bulkAssignee} onChange={(e) => setBulkAssignee(e.target.value)} />
+        <button onClick={() => runBulkAction('assignee', bulkAssignee)} style={{ background: '#1a1a1a', color: '#fff', border: '1px solid #333', borderRadius: '8px', padding: '0.6rem 0.9rem', cursor: 'pointer' }}>Assign</button>
+        <input className="chat-input" placeholder="Tag to add" value={bulkTag} onChange={(e) => setBulkTag(e.target.value)} />
+        <button onClick={() => runBulkAction('add_tag', bulkTag)} style={{ background: '#1a1a1a', color: '#fff', border: '1px solid #333', borderRadius: '8px', padding: '0.6rem 0.9rem', cursor: 'pointer' }}>Add Tag</button>
+      </div>
+
       <div className="leads-table-container">
         <table className="leads-table">
           <thead>
             <tr>
+              <th>Select</th>
               <th>Name</th>
               <th>WhatsApp</th>
               <th>Intent</th>
@@ -393,11 +516,20 @@ export default function DashboardPage() {
           <tbody>
             {leads.map((lead) => (
               <tr key={lead.id}>
+                <td>
+                  <input type="checkbox" checked={selectedContacts.includes(lead.sender_id)} onChange={() => toggleContactSelection(lead.sender_id)} />
+                </td>
                 <td>{lead.name || 'Unknown'}</td>
                 <td>{lead.sender_id}</td>
                 <td>{lead.intent || 'N/A'}</td>
                 <td><span className="status-badge">{lead.status || 'New'}</span></td>
                 <td>
+                  <button
+                    onClick={() => setActiveContactId(lead.sender_id)}
+                    style={{ background: '#1a1a1a', color: '#fff', border: '1px solid #333', borderRadius: '8px', padding: '0.4rem 0.75rem', cursor: 'pointer', marginRight: '0.5rem' }}
+                  >
+                    Profile
+                  </button>
                   <button
                     onClick={() => {
                       setActiveChatId(lead.sender_id);
@@ -413,6 +545,50 @@ export default function DashboardPage() {
           </tbody>
         </table>
       </div>
+
+      {activeContact && (
+        <div className="stat-card" style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '1rem' }}>
+          <div>
+            <h4 style={{ marginBottom: '0.75rem', color: '#c5a059' }}>Contact Profile Drawer</h4>
+            <p style={{ color: '#888', marginBottom: '0.75rem' }}>{activeContact.name || activeContact.sender_id}</p>
+            <div style={{ display: 'grid', gap: '0.6rem' }}>
+              <input className="chat-input" value={contactStatus} onChange={(e) => setContactStatus(e.target.value)} placeholder="Pipeline Status" />
+              <input className="chat-input" value={contactAssignee} onChange={(e) => setContactAssignee(e.target.value)} placeholder="Assigned To" />
+              <input className="chat-input" value={contactTagsInput} onChange={(e) => setContactTagsInput(e.target.value)} placeholder="Tags (comma separated)" />
+              <textarea className="chat-input" value={contactNotes} onChange={(e) => setContactNotes(e.target.value)} placeholder="Notes" rows={4} />
+              <button onClick={saveContactProfile} style={{ background: '#c5a059', color: '#000', border: 'none', borderRadius: '8px', padding: '0.6rem 0.9rem', fontWeight: 700, cursor: 'pointer' }}>
+                Save Profile
+              </button>
+              <div style={{ color: '#888', fontSize: '0.85rem' }}>
+                Last activity: {new Date(activeContact.created_at).toLocaleString()}
+              </div>
+            </div>
+          </div>
+          <div>
+            <h4 style={{ marginBottom: '0.75rem', color: '#c5a059' }}>Dedicated Chat Workspace</h4>
+            <div className="messages-list" style={{ height: '280px', border: '1px solid #333', borderRadius: '8px', padding: '0.75rem' }}>
+              {chatHistory
+                .filter((m) => m.sender_id === activeContact.sender_id)
+                .map((msg, i) => (
+                  <div key={i} className={`message-bubble ${msg.role}`}>
+                    {msg.message || `[${msg.media_type || 'message'}]`}
+                  </div>
+                ))}
+            </div>
+            <div style={{ marginTop: '0.6rem', display: 'flex', gap: '0.5rem' }}>
+              <button
+                onClick={() => {
+                  setActiveChatId(activeContact.sender_id);
+                  setView('Conversations');
+                }}
+                style={{ background: '#1a1a1a', color: '#fff', border: '1px solid #333', borderRadius: '8px', padding: '0.6rem 0.9rem', cursor: 'pointer' }}
+              >
+                Open Full Conversation
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -420,25 +596,24 @@ export default function DashboardPage() {
     <div className="leads-table-container" style={{ padding: '2rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
         <h3>Conversational Flows</h3>
-        <button style={{ background: '#c5a059', color: 'black', border: 'none', padding: '0.6rem 1.2rem', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
-          + Create New Flow
-        </button>
+        <div style={{ display: 'flex', gap: '0.6rem' }}>
+          <input className="chat-input" placeholder="Flow name" value={newFlowName} onChange={(e) => setNewFlowName(e.target.value)} />
+          <button onClick={createFlow} style={{ background: '#c5a059', color: 'black', border: 'none', padding: '0.6rem 1.2rem', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
+            + Create New Flow
+          </button>
+        </div>
       </div>
+      <textarea className="chat-input" placeholder='Flow nodes JSON (example: [{"type":"question","text":"Budget?"}])' value={newFlowNodes} onChange={(e) => setNewFlowNodes(e.target.value)} rows={5} style={{ width: '100%', marginBottom: '1rem' }} />
       <div style={{ display: 'grid', gap: '1rem' }}>
-        <div className="stat-card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <div style={{ fontWeight: '600' }}>Property Booking Flow</div>
-            <div style={{ fontSize: '0.8rem', color: '#888' }}>Collects area and budget from users.</div>
+        {flows.map((flow) => (
+          <div key={flow.id} className="stat-card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontWeight: '600' }}>{flow.name}</div>
+              <div style={{ fontSize: '0.8rem', color: '#888' }}>{Array.isArray(flow.nodes) ? flow.nodes.length : 0} node(s)</div>
+            </div>
+            <div style={{ color: flow.is_active ? '#4ade80' : '#888', fontSize: '0.8rem' }}>{flow.is_active ? 'Active' : 'Inactive'}</div>
           </div>
-          <div style={{ color: '#4ade80', fontSize: '0.8rem' }}>Active</div>
-        </div>
-        <div className="stat-card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', opacity: 0.5 }}>
-          <div>
-            <div style={{ fontWeight: '600' }}>Customer Support FAQ</div>
-            <div style={{ fontSize: '0.8rem', color: '#888' }}>Standard replies for common questions.</div>
-          </div>
-          <div style={{ color: '#888', fontSize: '0.8rem' }}>Draft</div>
-        </div>
+        ))}
       </div>
     </div>
   );

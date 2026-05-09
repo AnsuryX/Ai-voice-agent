@@ -56,6 +56,34 @@ class ContactRequest(BaseModel):
     area: Optional[str] = None
     status: Optional[str] = "Contact"
 
+
+class ContactUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    intent: Optional[str] = None
+    area: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+    tags: Optional[list[str]] = None
+    assignee: Optional[str] = None
+
+
+class BulkActionRequest(BaseModel):
+    sender_ids: list[str]
+    action: str
+    value: Optional[str] = None
+
+
+class FlowCreateRequest(BaseModel):
+    name: str
+    nodes: Optional[list] = None
+    is_active: Optional[bool] = True
+
+
+class FlowUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    nodes: Optional[list] = None
+    is_active: Optional[bool] = None
+
 def get_config(key, env=None):
     if env and hasattr(env, key):
         return getattr(env, key)
@@ -198,7 +226,102 @@ async def create_contact(req: ContactRequest, request: Request):
         area=req.area,
         status=req.status,
     )
+    await lead_manager.update_lead(
+        sender_id=req.sender_id,
+        flow_context={"notes": "", "tags": [], "assignee": ""},
+    )
     return {"status": "created"}
+
+
+@app.patch("/api/contacts/{sender_id}")
+async def update_contact(sender_id: str, req: ContactUpdateRequest, request: Request):
+    env = getattr(request.state, "env", None)
+    init_services(env)
+    existing = await lead_manager.get_lead(sender_id) or {}
+    context = existing.get("flow_context") or {}
+    if req.notes is not None:
+        context["notes"] = req.notes
+    if req.tags is not None:
+        context["tags"] = req.tags
+    if req.assignee is not None:
+        context["assignee"] = req.assignee
+
+    await lead_manager.update_lead(
+        sender_id=sender_id,
+        name=req.name,
+        intent=req.intent,
+        area=req.area,
+        status=req.status,
+        flow_context=context,
+    )
+    return {"status": "updated"}
+
+
+@app.post("/api/contacts/bulk")
+async def bulk_update_contacts(req: BulkActionRequest, request: Request):
+    env = getattr(request.state, "env", None)
+    init_services(env)
+    if not lead_manager or not lead_manager.supabase:
+        raise HTTPException(status_code=500, detail="Supabase not configured")
+
+    for sender_id in req.sender_ids:
+        lead = await lead_manager.get_lead(sender_id) or {}
+        context = lead.get("flow_context") or {}
+        if req.action == "status":
+            await lead_manager.update_lead(sender_id=sender_id, status=req.value or "Contact")
+        elif req.action == "assignee":
+            context["assignee"] = req.value or ""
+            await lead_manager.update_lead(sender_id=sender_id, flow_context=context)
+        elif req.action == "add_tag":
+            tags = context.get("tags") or []
+            if req.value and req.value not in tags:
+                tags.append(req.value)
+            context["tags"] = tags
+            await lead_manager.update_lead(sender_id=sender_id, flow_context=context)
+    return {"status": "bulk-updated"}
+
+
+@app.get("/api/flows")
+async def list_flows(request: Request):
+    env = getattr(request.state, "env", None)
+    init_services(env)
+    if not lead_manager or not lead_manager.supabase:
+        raise HTTPException(status_code=500, detail="Supabase not configured")
+    result = lead_manager.supabase.table("flows").select("*").order("created_at", desc=True).execute()
+    return result.data or []
+
+
+@app.post("/api/flows")
+async def create_flow(req: FlowCreateRequest, request: Request):
+    env = getattr(request.state, "env", None)
+    init_services(env)
+    if not lead_manager or not lead_manager.supabase:
+        raise HTTPException(status_code=500, detail="Supabase not configured")
+    payload = {
+        "name": req.name,
+        "nodes": req.nodes or [],
+        "is_active": req.is_active,
+    }
+    lead_manager.supabase.table("flows").insert(payload).execute()
+    return {"status": "created"}
+
+
+@app.patch("/api/flows/{flow_id}")
+async def update_flow(flow_id: str, req: FlowUpdateRequest, request: Request):
+    env = getattr(request.state, "env", None)
+    init_services(env)
+    if not lead_manager or not lead_manager.supabase:
+        raise HTTPException(status_code=500, detail="Supabase not configured")
+    updates = {}
+    if req.name is not None:
+        updates["name"] = req.name
+    if req.nodes is not None:
+        updates["nodes"] = req.nodes
+    if req.is_active is not None:
+        updates["is_active"] = req.is_active
+    if updates:
+        lead_manager.supabase.table("flows").update(updates).eq("id", flow_id).execute()
+    return {"status": "updated"}
 
 @app.get("/webhook")
 async def verify_webhook(request: Request):
