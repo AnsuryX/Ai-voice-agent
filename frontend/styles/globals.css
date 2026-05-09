@@ -143,3 +143,139 @@ body {
   margin-bottom: 1rem;
   color: var(--primary);
 }
+
+/* Conversations View */
+.conversations-container {
+  display: flex;
+  height: calc(100vh - 160px);
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.conversations-sidebar {
+  width: 320px;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.conversation-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.conversation-item {
+  padding: 1.25rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.conversation-item:hover {
+  background: var(--accent);
+}
+
+.conversation-item.active {
+  background: var(--accent);
+  border-left: 3px solid var(--primary);
+}
+
+.chat-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #0d0d0d;
+}
+
+.chat-header {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--secondary);
+}
+
+.messages-list {
+  flex: 1;
+  padding: 1.5rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.message-bubble {
+  max-width: 70%;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  font-size: 0.9375rem;
+  line-height: 1.4;
+  position: relative;
+}
+
+.message-bubble.user {
+  align-self: flex-start;
+  background: var(--accent);
+  color: white;
+  border-bottom-left-radius: 2px;
+}
+
+.message-bubble.assistant {
+  align-self: flex-end;
+  background: var(--primary);
+  color: black;
+  border-bottom-right-radius: 2px;
+}
+
+.message-time {
+  font-size: 0.7rem;
+  margin-top: 0.25rem;
+  opacity: 0.7;
+}
+
+.chat-input-area {
+  padding: 1rem 1.5rem;
+  border-top: 1px solid var(--border);
+  background: var(--secondary);
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.chat-input {
+  flex: 1;
+  background: var(--accent);
+  border: 1px solid var(--border);
+  color: white;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  outline: none;
+}
+
+.chat-input:focus {
+  border-color: var(--primary);
+}
+
+.icon-button {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s;
+}
+
+.icon-button:hover {
+  color: var(--primary);
+}
+
+.media-preview {
+  max-width: 100%;
+  border-radius: 8px;
+  margin-top: 0.5rem;
+}

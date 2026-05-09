@@ -31,8 +31,14 @@ GOALS:
 
     async def get_response(self, user_message: str, chat_history: list = None):
         messages = [{"role": "system", "content": self.system_prompt}]
+        
         if chat_history:
-            messages.extend(chat_history)
+            # Convert DB history to Groq format
+            for msg in chat_history:
+                role = "assistant" if msg["role"] == "assistant" else "user"
+                content = msg["message"] or "[Media/Attachment]"
+                messages.append({"role": role, "content": content})
+
         messages.append({"role": "user", "content": user_message})
         
         try:

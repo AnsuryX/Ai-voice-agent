@@ -103,3 +103,7 @@ npm run build
   - Chat History
 - The backend now creates lead table rows for incoming WhatsApp conversations, so the dashboard receives real data.
 - If you need a direct backend API route for the dashboard in the future, that can be added as a separate layer.
+
+Production URL: https://frontend-five-topaz-65.vercel.app
+Status: Deployment completed
+Changes included: Working Settings page, live refresh control, webhook copy actions, reset utilities

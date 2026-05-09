@@ -32,6 +32,8 @@ def setup_database():
         intent TEXT,
         area TEXT,
         status TEXT DEFAULT 'New',
+        flow_state TEXT,
+        flow_context JSONB DEFAULT '{}'::jsonb,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );
 
@@ -39,8 +41,20 @@ def setup_database():
     CREATE TABLE IF NOT EXISTS chat_history (
         id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
         sender_id TEXT NOT NULL,
-        message TEXT NOT NULL,
-        role TEXT NOT NULL, -- 'user' or 'assistant'
+        message TEXT,
+        role TEXT NOT NULL, -- 'user', 'assistant', or 'system'
+        media_url TEXT,
+        media_type TEXT, -- 'image', 'video', 'audio', 'document', 'text'
+        metadata JSONB DEFAULT '{}'::jsonb,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+
+    -- Create Flows table
+    CREATE TABLE IF NOT EXISTS flows (
+        id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+        name TEXT NOT NULL,
+        nodes JSONB NOT NULL DEFAULT '[]'::jsonb,
+        is_active BOOLEAN DEFAULT true,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );
     """

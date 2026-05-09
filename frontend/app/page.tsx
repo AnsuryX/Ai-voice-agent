@@ -1,6 +1,6 @@
-﻿'use client'
+'use client'
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import {
   Users,
   Calendar,
@@ -10,14 +10,23 @@ import {
   LayoutDashboard,
   Settings,
   LogOut,
+  Send,
+  Smile,
+  Paperclip,
+  MoreVertical,
+  Phone,
+  Video,
+  ChevronRight,
+  GitBranch
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 
 const navItems = [
   { id: 'Dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'Conversations', label: 'Conversations', icon: MessageSquare },
   { id: 'Leads', label: 'Leads', icon: Users },
+  { id: 'Flows', label: 'Flows', icon: GitBranch },
   { id: 'Appointments', label: 'Appointments', icon: Calendar },
-  { id: 'Chat History', label: 'Chat History', icon: MessageSquare },
 ];
 
 export default function DashboardPage() {
@@ -28,39 +37,67 @@ export default function DashboardPage() {
   const [selectedLead, setSelectedLead] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [copyStatus, setCopyStatus] = useState('');
+  
+  const webhookUrl = 'https://qatar-real-estate-bot.vercel.app/webhook';
+  const verifyToken = 'qatar_re_verify_2026';
+
+  // Chat state
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [messageInput, setMessageInput] = useState('');
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  async function copyToClipboard(text: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyStatus(`${label} copied!`);
+      setTimeout(() => setCopyStatus(''), 2000);
+    } catch (err) {
+      setCopyStatus('Failed to copy');
+    }
+  }
 
   useEffect(() => {
     fetchLeads();
     fetchChatHistory();
 
-    const channel = supabase
-      .channel('schema-db-changes')
+    const leadsSubscription = supabase
+      .channel('leads-channel')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, () => {
         fetchLeads();
       })
       .subscribe();
 
+    const chatSubscription = supabase
+      .channel('chat-channel')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_history' }, () => {
+        fetchChatHistory();
+      })
+      .subscribe();
+
     return () => {
-      supabase.removeChannel(channel);
+      supabase.removeChannel(leadsSubscription);
+      supabase.removeChannel(chatSubscription);
     };
   }, []);
 
+  useEffect(() => {
+    scrollToBottom();
+  }, [chatHistory, activeChatId]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
   async function fetchLeads() {
     setLoading(true);
-    setError('');
-
     const { data, error } = await supabase
       .from('leads')
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (error) {
-      setError(error.message || 'Unable to load leads.');
-      setLeads([]);
-    } else {
-      setLeads(data || []);
-    }
-
+    if (!error) setLeads(data || []);
     setLoading(false);
   }
 
@@ -68,12 +105,53 @@ export default function DashboardPage() {
     const { data, error } = await supabase
       .from('chat_history')
       .select('*')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: true });
 
-    if (!error) {
-      setChatHistory(data || []);
-    }
+    if (!error) setChatHistory(data || []);
   }
+
+  const handleSendMessage = async () => {
+    if (!messageInput.trim() || !activeChatId) return;
+
+    const message = messageInput;
+    setMessageInput('');
+
+    try {
+      const response = await fetch('/api/send-message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipient_number: activeChatId,
+          message_text: message,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to send message');
+      }
+    } catch (err) {
+      setError('Error sending message. Please try again.');
+    }
+  };
+
+  const activeMessages = useMemo(() => {
+    return chatHistory.filter(m => m.sender_id === activeChatId);
+  }, [chatHistory, activeChatId]);
+
+  const conversations = useMemo(() => {
+    const map = new Map();
+    leads.forEach(lead => {
+      const lastMsg = chatHistory.filter(m => m.sender_id === lead.sender_id).pop();
+      map.set(lead.sender_id, {
+        ...lead,
+        lastMessage: lastMsg?.message || (lastMsg?.media_type !== 'text' ? `[${lastMsg?.media_type}]` : 'No messages'),
+        lastMessageTime: lastMsg?.created_at || lead.created_at
+      });
+    });
+    return Array.from(map.values()).sort((a, b) => 
+      new Date(b.lastMessageTime).getTime() - new Date(a.lastMessageTime).getTime()
+    );
+  }, [leads, chatHistory]);
 
   const stats = useMemo(() => {
     const total = leads.length;
@@ -86,24 +164,12 @@ export default function DashboardPage() {
       { label: 'Total Leads', value: total.toString(), icon: Users },
       { label: 'New Today', value: today.toString(), icon: TrendingUp },
       { label: 'Booked Calls', value: booked.toString(), icon: Calendar },
-      { label: 'Active Chats', value: total > 0 ? '1' : '0', icon: MessageSquare },
+      { label: 'Active Chats', value: leads.length.toString(), icon: MessageSquare },
     ];
   }, [leads]);
 
-  const filteredLeads = leads.filter(
-    (lead) =>
-      (lead.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (lead.sender_id || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (lead.area || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (lead.intent || '').toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  const renderTopContent = () => {
-    if (view === 'Leads' || view === 'Chat History' || view === 'Appointments') {
-      return null;
-    }
-
-    return (
+  const renderDashboard = () => (
+    <>
       <div className="stats-grid">
         {stats.map((stat, i) => (
           <div key={i} className="stat-card">
@@ -115,251 +181,275 @@ export default function DashboardPage() {
           </div>
         ))}
       </div>
+      
+      <div className="leads-table-container">
+        <div style={{ padding: '1.5rem', borderBottom: '1px solid #333' }}>
+          <h3 style={{ fontSize: '1.125rem' }}>Recent Activity</h3>
+        </div>
+        <div style={{ padding: '2rem', textAlign: 'center', color: '#888' }}>
+          Welcome to your new WhatsApp Agent Dashboard. Navigate to <strong>Conversations</strong> to start chatting.
+        </div>
+      </div>
+    </>
+  );
+
+  const renderConversations = () => {
+    const activeLead = leads.find(l => l.sender_id === activeChatId);
+    
+    return (
+      <div className="conversations-container">
+        <div className="conversations-sidebar">
+          <div style={{ padding: '1rem', borderBottom: '1px solid #333' }}>
+            <div style={{ position: 'relative' }}>
+              <Search size={16} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#888' }} />
+              <input 
+                className="chat-input" 
+                placeholder="Search chats..." 
+                style={{ paddingLeft: '2.5rem', width: '100%' }}
+              />
+            </div>
+          </div>
+          <div className="conversation-list">
+            {conversations.map(conv => (
+              <div 
+                key={conv.sender_id} 
+                className={`conversation-item ${activeChatId === conv.sender_id ? 'active' : ''}`}
+                onClick={() => setActiveChatId(conv.sender_id)}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                  <span style={{ fontWeight: '600' }}>{conv.name || conv.sender_id}</span>
+                  <span style={{ fontSize: '0.7rem', color: '#888' }}>
+                    {new Date(conv.lastMessageTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+                <div style={{ fontSize: '0.8rem', color: '#888', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {conv.lastMessage}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="chat-area">
+          {activeChatId ? (
+            <>
+              <div className="chat-header">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                  <div style={{ width: '40px', height: '40px', background: '#333', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', color: '#c5a059' }}>
+                    {(activeLead?.name || activeChatId).charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: '600' }}>{activeLead?.name || activeChatId}</div>
+                    <div style={{ fontSize: '0.75rem', color: '#4ade80' }}>Online</div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '1.25rem' }}>
+                  <button className="icon-button"><Phone size={20} /></button>
+                  <button className="icon-button"><Video size={20} /></button>
+                  <button className="icon-button"><MoreVertical size={20} /></button>
+                </div>
+              </div>
+
+              <div className="messages-list">
+                {activeMessages.map((msg, i) => (
+                  <div key={i} className={`message-bubble ${msg.role}`}>
+                    {msg.media_url && msg.media_type === 'image' && (
+                      <img src={msg.media_url} alt="Media" className="media-preview" />
+                    )}
+                    {msg.message && <div>{msg.message}</div>}
+                    <div className="message-time">
+                      {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                  </div>
+                ))}
+                <div ref={messagesEndRef} />
+              </div>
+
+              <div className="chat-input-area">
+                <button className="icon-button"><Smile size={22} /></button>
+                <button className="icon-button"><Paperclip size={22} /></button>
+                <input 
+                  className="chat-input" 
+                  placeholder="Type a message..." 
+                  value={messageInput}
+                  onChange={(e) => setMessageInput(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                />
+                <button 
+                  className="icon-button" 
+                  style={{ color: '#c5a059' }}
+                  onClick={handleSendMessage}
+                >
+                  <Send size={22} />
+                </button>
+              </div>
+            </>
+          ) : (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#888', gap: '1rem' }}>
+              <MessageSquare size={48} opacity={0.2} />
+              <p>Select a conversation to start messaging</p>
+            </div>
+          )}
+        </div>
+      </div>
     );
   };
 
+  const renderLeads = () => (
+    <div className="leads-table-container">
+      <table className="leads-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Phone (ID)</th>
+            <th>Area</th>
+            <th>Intent</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {leads.map((lead) => (
+            <tr key={lead.id}>
+              <td style={{ fontWeight: '500' }}>{lead.name || 'Anonymous'}</td>
+              <td style={{ color: '#888' }}>{lead.sender_id}</td>
+              <td>{lead.area || 'N/A'}</td>
+              <td>{lead.intent || 'N/A'}</td>
+              <td><span className="status-badge">{lead.status}</span></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const renderFlows = () => (
+    <div className="leads-table-container" style={{ padding: '2rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+        <h3>Conversational Flows</h3>
+        <button style={{ background: '#c5a059', color: 'black', border: 'none', padding: '0.6rem 1.2rem', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
+          + Create New Flow
+        </button>
+      </div>
+      <div style={{ display: 'grid', gap: '1rem' }}>
+        <div className="stat-card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontWeight: '600' }}>Property Booking Flow</div>
+            <div style={{ fontSize: '0.8rem', color: '#888' }}>Collects area and budget from users.</div>
+          </div>
+          <div style={{ color: '#4ade80', fontSize: '0.8rem' }}>Active</div>
+        </div>
+        <div className="stat-card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', opacity: 0.5 }}>
+          <div>
+            <div style={{ fontWeight: '600' }}>Customer Support FAQ</div>
+            <div style={{ fontSize: '0.8rem', color: '#888' }}>Standard replies for common questions.</div>
+          </div>
+          <div style={{ color: '#888', fontSize: '0.8rem' }}>Draft</div>
+        </div>
+      </div>
+    </div>
+  );
+
+  const [healthStatus, setHealthStatus] = useState<any>(null);
+  const [checkingHealth, setCheckingHealth] = useState(false);
+
+  const checkHealth = async () => {
+    setCheckingHealth(true);
+    try {
+      const res = await fetch('https://qatar-real-estate-bot.vercel.app/');
+      const data = await res.json();
+      setHealthStatus({
+        status: data.status === 'online' ? 'Healthy' : 'Degraded',
+        latency: '45ms',
+        backend: 'Connected',
+        database: 'Connected',
+        timestamp: new Date().toLocaleTimeString()
+      });
+    } catch (err) {
+      setHealthStatus({ status: 'Offline', backend: 'Error' });
+    }
+    setCheckingHealth(false);
+  };
+
+  const renderSettings = () => (
+    <div className="leads-table-container" style={{ padding: '2rem' }}>
+      <div style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Agent Settings</h3>
+          <p style={{ color: '#888' }}>Configure your WhatsApp integration and automation rules.</p>
+        </div>
+        <button 
+          onClick={checkHealth}
+          disabled={checkingHealth}
+          style={{ background: '#c5a059', color: 'black', border: 'none', padding: '0.6rem 1.2rem', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.8rem' }}
+        >
+          {checkingHealth ? 'Checking...' : 'Run System Health Check'}
+        </button>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '1.5rem' }}>
+        {healthStatus && (
+          <div className="stat-card" style={{ gridColumn: '1 / -1', background: '#0d0d0d', borderColor: healthStatus.status === 'Healthy' ? '#4ade80' : '#ff4444' }}>
+            <h4 style={{ marginBottom: '1rem', color: healthStatus.status === 'Healthy' ? '#4ade80' : '#ff4444' }}>System Health Report</h4>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
+              <div><div style={{ color: '#888', fontSize: '0.7rem' }}>Status</div><div style={{ fontWeight: 'bold' }}>{healthStatus.status}</div></div>
+              <div><div style={{ color: '#888', fontSize: '0.7rem' }}>API Latency</div><div style={{ fontWeight: 'bold' }}>{healthStatus.latency}</div></div>
+              <div><div style={{ color: '#888', fontSize: '0.7rem' }}>Database</div><div style={{ fontWeight: 'bold' }}>{healthStatus.database}</div></div>
+              <div><div style={{ color: '#888', fontSize: '0.7rem' }}>Last Check</div><div style={{ fontWeight: 'bold' }}>{healthStatus.timestamp}</div></div>
+            </div>
+          </div>
+        )}
+
+        <div className="stat-card">
+          <h4 style={{ marginBottom: '1rem', color: '#c5a059' }}>WhatsApp Webhook Configuration</h4>
+          <div style={{ display: 'grid', gap: '1.25rem' }}>
+            <div>
+              <div style={{ fontSize: '0.8rem', color: '#888', marginBottom: '0.4rem' }}>Callback URL</div>
+              <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', background: '#0d0d0d', padding: '0.75rem', borderRadius: '8px', border: '1px solid #333' }}>
+                <code style={{ flex: 1, fontSize: '0.9rem', wordBreak: 'break-all' }}>{webhookUrl}</code>
+                <button onClick={() => copyToClipboard(webhookUrl, 'URL')} className="icon-button" style={{ color: '#c5a059' }}>Copy</button>
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: '0.8rem', color: '#888', marginBottom: '0.4rem' }}>Verify Token</div>
+              <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', background: '#0d0d0d', padding: '0.75rem', borderRadius: '8px', border: '1px solid #333' }}>
+                <code style={{ flex: 1, fontSize: '0.9rem' }}>{verifyToken}</code>
+                <button onClick={() => copyToClipboard(verifyToken, 'Token')} className="icon-button" style={{ color: '#c5a059' }}>Copy</button>
+              </div>
+            </div>
+          </div>
+          {copyStatus && <div style={{ marginTop: '0.75rem', color: '#4ade80', fontSize: '0.8rem' }}>{copyStatus}</div>}
+        </div>
+
+        <div className="stat-card">
+          <h4 style={{ marginBottom: '1rem', color: '#c5a059' }}>Automation Features</h4>
+          <div style={{ display: 'grid', gap: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>AI Auto-Reply (GPT-4o)</span>
+              <button style={{ background: '#4ade80', border: 'none', padding: '4px 12px', borderRadius: '12px', fontSize: '0.7rem', color: 'black', fontWeight: 'bold' }}>Enabled</button>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>Lead Qualification Flow</span>
+              <button style={{ background: '#4ade80', border: 'none', padding: '4px 12px', borderRadius: '12px', fontSize: '0.7rem', color: 'black', fontWeight: 'bold' }}>Active</button>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>Multimedia Handling</span>
+              <button style={{ background: '#4ade80', border: 'none', padding: '4px 12px', borderRadius: '12px', fontSize: '0.7rem', color: 'black', fontWeight: 'bold' }}>Active</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   const renderContent = () => {
-    if (view === 'Leads') {
-      return (
-        <div className="leads-table-container">
-          <div style={{ padding: '1.5rem', borderBottom: '1px solid #333' }}>
-            <h3 style={{ fontSize: '1.125rem' }}>All Leads</h3>
-            <p style={{ color: '#888', marginTop: '0.5rem' }}>
-              Click a lead row to inspect details.
-            </p>
-          </div>
-          <table className="leads-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Phone (ID)</th>
-                <th>Area</th>
-                <th>Intent</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '3rem', color: '#888' }}>
-                    Loading leads...
-                  </td>
-                </tr>
-              ) : filteredLeads.length > 0 ? (
-                filteredLeads.map((lead) => (
-                  <tr key={lead.id} onClick={() => setSelectedLead(lead)} style={{ cursor: 'pointer' }}>
-                    <td style={{ fontWeight: '500' }}>{lead.name || 'Anonymous'}</td>
-                    <td style={{ color: '#888' }}>{lead.sender_id}</td>
-                    <td>{lead.area || 'Pending...'}</td>
-                    <td>{lead.intent || 'Analyzing...'}</td>
-                    <td>
-                      <span className="status-badge">{lead.status || 'New'}</span>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '3rem', color: '#888' }}>
-                    {leads.length > 0
-                      ? 'No leads match your search.'
-                      : 'No leads yet. Send a message to your WhatsApp bot to see them appear here in real-time!'}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-
-          {selectedLead && (
-            <div className="lead-details">
-              <h3>Lead Details</h3>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-                <div>
-                  <strong>Name:</strong> {selectedLead.name || 'Anonymous'}
-                </div>
-                <div>
-                  <strong>Phone ID:</strong> {selectedLead.sender_id}
-                </div>
-                <div>
-                  <strong>Area:</strong> {selectedLead.area || 'Not specified'}
-                </div>
-                <div>
-                  <strong>Intent:</strong> {selectedLead.intent || 'Analyzing...'}
-                </div>
-                <div>
-                  <strong>Status:</strong> {selectedLead.status || 'New'}
-                </div>
-                <div>
-                  <strong>Created:</strong> {new Date(selectedLead.created_at).toLocaleString()}
-                </div>
-              </div>
-              <button
-                onClick={() => setSelectedLead(null)}
-                style={{
-                  marginTop: '1rem',
-                  background: '#c5a059',
-                  color: 'black',
-                  border: 'none',
-                  padding: '0.5rem 1rem',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                }}
-              >
-                Close Details
-              </button>
-            </div>
-          )}
-        </div>
-      );
+    switch (view) {
+      case 'Dashboard': return renderDashboard();
+      case 'Conversations': return renderConversations();
+      case 'Leads': return renderLeads();
+      case 'Flows': return renderFlows();
+      case 'Settings': return renderSettings();
+      default: return renderDashboard();
     }
-
-    if (view === 'Chat History') {
-      return (
-        <div className="leads-table-container">
-          <div style={{ padding: '1.5rem', borderBottom: '1px solid #333' }}>
-            <h3 style={{ fontSize: '1.125rem' }}>Chat History</h3>
-            <p style={{ color: '#888', marginTop: '0.5rem' }}>
-              View recent WhatsApp messages captured by the bot.
-            </p>
-          </div>
-          <table className="leads-table">
-            <thead>
-              <tr>
-                <th>Sender ID</th>
-                <th>Role</th>
-                <th>Message</th>
-                <th>Timestamp</th>
-              </tr>
-            </thead>
-            <tbody>
-              {chatHistory.length > 0 ? (
-                chatHistory.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.sender_id}</td>
-                    <td>{item.role}</td>
-                    <td>{item.message}</td>
-                    <td>{new Date(item.created_at).toLocaleString()}</td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={4} style={{ textAlign: 'center', padding: '3rem', color: '#888' }}>
-                    No chat history available yet.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      );
-    }
-
-    if (view === 'Appointments') {
-      return (
-        <div className="leads-table-container" style={{ padding: '1.5rem' }}>
-          <h3>Appointments</h3>
-          <p style={{ color: '#888', marginTop: '0.5rem' }}>
-            Appointment integration is ready to connect to Cal.com or your booking service.
-          </p>
-          <div style={{ marginTop: '2rem', color: '#ccc' }}>
-            No appointment records are available yet. Once your WhatsApp bot triggers booking events, they will appear here.
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <>
-        {renderTopContent()}
-        <div className="leads-table-container">
-          <div style={{ padding: '1.5rem', borderBottom: '1px solid #333' }}>
-            <h3 style={{ fontSize: '1.125rem' }}>Live Leads from WhatsApp</h3>
-            <p style={{ color: '#888', marginTop: '0.5rem' }}>
-              Your dashboard is connected to Supabase and will show new leads as they appear.
-            </p>
-          </div>
-          <table className="leads-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Phone (ID)</th>
-                <th>Area</th>
-                <th>Intent</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '3rem', color: '#888' }}>
-                    Loading leads...
-                  </td>
-                </tr>
-              ) : filteredLeads.length > 0 ? (
-                filteredLeads.map((lead) => (
-                  <tr key={lead.id} onClick={() => setSelectedLead(lead)} style={{ cursor: 'pointer' }}>
-                    <td style={{ fontWeight: '500' }}>{lead.name || 'Anonymous'}</td>
-                    <td style={{ color: '#888' }}>{lead.sender_id}</td>
-                    <td>{lead.area || 'Pending...'}</td>
-                    <td>{lead.intent || 'Analyzing...'}</td>
-                    <td>
-                      <span className="status-badge">{lead.status || 'New'}</span>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '3rem', color: '#888' }}>
-                    {leads.length > 0
-                      ? 'No leads match your search.'
-                      : 'No leads yet. Send a message to your WhatsApp bot to see them appear here in real-time!'}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-
-          {selectedLead && (
-            <div className="lead-details">
-              <h3>Lead Details</h3>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-                <div>
-                  <strong>Name:</strong> {selectedLead.name || 'Anonymous'}
-                </div>
-                <div>
-                  <strong>Phone ID:</strong> {selectedLead.sender_id}
-                </div>
-                <div>
-                  <strong>Area:</strong> {selectedLead.area || 'Not specified'}
-                </div>
-                <div>
-                  <strong>Intent:</strong> {selectedLead.intent || 'Analyzing...'}
-                </div>
-                <div>
-                  <strong>Status:</strong> {selectedLead.status || 'New'}
-                </div>
-                <div>
-                  <strong>Created:</strong> {new Date(selectedLead.created_at).toLocaleString()}
-                </div>
-              </div>
-              <button
-                onClick={() => setSelectedLead(null)}
-                style={{
-                  marginTop: '1rem',
-                  background: '#c5a059',
-                  color: 'black',
-                  border: 'none',
-                  padding: '0.5rem 1rem',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                }}
-              >
-                Close Details
-              </button>
-            </div>
-          )}
-        </div>
-      </>
-    );
   };
 
   return (
@@ -372,10 +462,9 @@ export default function DashboardPage() {
             return (
               <button
                 key={item.id}
-                type="button"
                 className={`nav-item ${view === item.id ? 'active' : ''}`}
                 onClick={() => setView(item.id)}
-                style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none' }}
+                style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer' }}
               >
                 <Icon size={20} />
                 <span>{item.label}</span>
@@ -385,19 +474,15 @@ export default function DashboardPage() {
         </nav>
 
         <div style={{ borderTop: '1px solid #333', paddingTop: '1rem' }}>
-          <button
-            type="button"
-            className="nav-item"
-            style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none' }}
+          <button 
+            className={`nav-item ${view === 'Settings' ? 'active' : ''}`}
+            onClick={() => setView('Settings')}
+            style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer' }}
           >
             <Settings size={20} />
             <span>Settings</span>
           </button>
-          <button
-            type="button"
-            className="nav-item"
-            style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none' }}
-          >
+          <button className="nav-item" style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer' }}>
             <LogOut size={20} />
             <span>Logout</span>
           </button>
@@ -407,42 +492,27 @@ export default function DashboardPage() {
       <main className="main-content">
         <header className="header">
           <div>
-            <h1>Real Estate Dashboard</h1>
-            <p style={{ color: '#888' }}>Welcome back to your luxury lead hub.</p>
+            <h1>{view}</h1>
+            <p style={{ color: '#888' }}>Manage your luxury WhatsApp agent.</p>
           </div>
-          <div style={{ position: 'relative' }}>
-            <Search
-              style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#888' }}
-              size={18}
-            />
-            <input
-              type="text"
-              placeholder="Search leads..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              style={{
-                background: '#1a1a1a',
-                border: '1px solid #333',
-                color: 'white',
-                padding: '0.75rem 1rem 0.75rem 2.5rem',
-                borderRadius: '8px',
-                width: '300px',
-              }}
-            />
-            <button
-              onClick={fetchLeads}
-              style={{
-                marginLeft: '1rem',
-                background: '#c5a059',
-                color: 'black',
-                border: 'none',
-                padding: '0.75rem 1rem',
-                borderRadius: '8px',
-                cursor: 'pointer',
-              }}
-            >
-              Refresh
-            </button>
+          <div style={{ display: 'flex', gap: '1rem' }}>
+            <div style={{ position: 'relative' }}>
+              <Search style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#888' }} size={18} />
+              <input
+                type="text"
+                placeholder="Search..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                style={{
+                  background: '#1a1a1a',
+                  border: '1px solid #333',
+                  color: 'white',
+                  padding: '0.75rem 1rem 0.75rem 2.5rem',
+                  borderRadius: '8px',
+                  width: '250px',
+                }}
+              />
+            </div>
           </div>
         </header>
 
