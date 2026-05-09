@@ -1,6 +1,8 @@
 import os
 import json
 import httpx
+import re
+from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -31,11 +33,13 @@ app.add_middleware(
 from orchestrator import AIOrchestrator
 from database import LeadManager
 from flow_engine import FlowEngine
+from booking import BookingManager
 
 # Global services that will be initialized per request or once
 orchestrator = None
 lead_manager = None
 flow_engine = None
+booking_manager = None
 
 
 class MessageRequest(BaseModel):
@@ -44,13 +48,21 @@ class MessageRequest(BaseModel):
     media_url: Optional[str] = None
     media_type: Optional[str] = "text"
 
+
+class ContactRequest(BaseModel):
+    sender_id: str
+    name: Optional[str] = None
+    intent: Optional[str] = None
+    area: Optional[str] = None
+    status: Optional[str] = "Contact"
+
 def get_config(key, env=None):
     if env and hasattr(env, key):
         return getattr(env, key)
     return os.getenv(key)
 
 def init_services(env=None):
-    global orchestrator, lead_manager, flow_engine
+    global orchestrator, lead_manager, flow_engine, booking_manager
     if orchestrator is None:
         orchestrator = AIOrchestrator(api_key=get_config("GROQ_API_KEY", env))
     if lead_manager is None:
@@ -60,6 +72,43 @@ def init_services(env=None):
         )
     if flow_engine is None:
         flow_engine = FlowEngine(lead_manager)
+    if booking_manager is None:
+        booking_manager = BookingManager()
+
+
+def detect_booking_type(user_text: str):
+    if not user_text:
+        return None
+    lower = user_text.lower()
+    if any(k in lower for k in ["visit", "viewing", "tour", "property visit"]):
+        return "visit"
+    if any(k in lower for k in ["call", "phone call", "meeting", "book"]):
+        return "call"
+    return None
+
+
+def extract_email(user_text: str):
+    if not user_text:
+        return None
+    match = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", user_text)
+    return match.group(0) if match else None
+
+
+async def try_create_cal_booking(sender_id: str, email: str, booking_type: str):
+    event_key = "CAL_CALL_EVENT_TYPE_ID" if booking_type == "call" else "CAL_VISIT_EVENT_TYPE_ID"
+    event_type_id = os.getenv(event_key)
+    if not event_type_id:
+        return None, f"Booking requested for {booking_type}, but {event_key} is missing in env."
+
+    # Simple default slot: next day 10:00 AM Qatar time (07:00 UTC)
+    now_utc = datetime.now(timezone.utc)
+    start_utc = (now_utc + timedelta(days=1)).replace(hour=7, minute=0, second=0, microsecond=0)
+    result = await booking_manager.create_booking(
+        attendee_email=email,
+        start_time=start_utc.isoformat(),
+        event_type_id=int(event_type_id),
+    )
+    return result, None
 
 async def send_whatsapp_message(
     recipient_number: str,
@@ -121,6 +170,36 @@ async def manual_send_message(req: MessageRequest, request: Request):
 
     return {"status": "sent"}
 
+
+@app.get("/api/contacts")
+async def list_contacts(request: Request):
+    env = getattr(request.state, "env", None)
+    init_services(env)
+    if not lead_manager or not lead_manager.supabase:
+        raise HTTPException(status_code=500, detail="Supabase not configured")
+
+    result = (
+        lead_manager.supabase.table("leads")
+        .select("*")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return result.data or []
+
+
+@app.post("/api/contacts")
+async def create_contact(req: ContactRequest, request: Request):
+    env = getattr(request.state, "env", None)
+    init_services(env)
+    await lead_manager.update_lead(
+        sender_id=req.sender_id,
+        name=req.name,
+        intent=req.intent,
+        area=req.area,
+        status=req.status,
+    )
+    return {"status": "created"}
+
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     params = request.query_params
@@ -146,8 +225,7 @@ async def handle_webhook(request: Request):
             for change in entry.get("changes", []):
                 value = change.get("value", {})
                 messages = value.get("messages", [])
-                if messages:
-                    msg = messages[0]
+                for msg in messages:
                     sender_id = msg.get("from")
                     msg_type = msg.get("type")
 
@@ -163,12 +241,49 @@ async def handle_webhook(request: Request):
                         user_text = msg[msg_type].get("caption")
                         media_url = f"https://whatsapp-media-placeholder.com/{media_id}"
 
-                    await lead_manager.save_message(sender_id, user_text, "user", media_url, media_type)
-
                     lead_data = await lead_manager.get_lead(sender_id)
                     if not lead_data:
                         await lead_manager.update_lead(sender_id)
                         lead_data = {"sender_id": sender_id}
+
+                    await lead_manager.save_message(sender_id, user_text, "user", media_url, media_type)
+
+                    booking_type = detect_booking_type(user_text or "")
+                    if booking_type:
+                        lead_data["flow_state"] = "awaiting_booking_email"
+                        lead_data["flow_context"] = {"booking_type": booking_type}
+                        await lead_manager.update_lead(
+                            sender_id,
+                            flow_state="awaiting_booking_email",
+                            flow_context={"booking_type": booking_type},
+                            status="Booking Requested",
+                        )
+                        response_text = "Perfect. Please share your email so I can book your " + booking_type + "."
+                        await lead_manager.save_message(sender_id, response_text, "assistant")
+                        await send_whatsapp_message(sender_id, response_text, env=env)
+                        continue
+
+                    if lead_data.get("flow_state") == "awaiting_booking_email":
+                        email = extract_email(user_text or "")
+                        if not email:
+                            response_text = "Please share a valid email address so I can complete the booking."
+                            await lead_manager.save_message(sender_id, response_text, "assistant")
+                            await send_whatsapp_message(sender_id, response_text, env=env)
+                            continue
+
+                        booking_type = (lead_data.get("flow_context") or {}).get("booking_type", "call")
+                        booking, booking_error = await try_create_cal_booking(sender_id, email, booking_type)
+                        if booking_error:
+                            response_text = "I captured your request, but booking config is incomplete. Please contact support."
+                        elif booking and booking.get("status") != "error":
+                            response_text = "Done. Your " + booking_type + " has been booked. We will share details shortly."
+                            await lead_manager.update_lead(sender_id, status="Booked", flow_state="", flow_context={})
+                        else:
+                            response_text = "I couldn't finalize booking automatically. Please try again in a moment."
+
+                        await lead_manager.save_message(sender_id, response_text, "assistant")
+                        await send_whatsapp_message(sender_id, response_text, env=env)
+                        continue
 
                     response_text = await flow_engine.process_message(sender_id, user_text, lead_data)
                     if not response_text and user_text:

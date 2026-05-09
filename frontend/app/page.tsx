@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import {
   Users,
+  UserPlus,
   Calendar,
   MessageSquare,
   TrendingUp,
@@ -27,6 +28,7 @@ const VERIFY_TOKEN_DISPLAY = process.env.NEXT_PUBLIC_WHATSAPP_VERIFY_TOKEN || 'S
 
 const navItems = [
   { id: 'Dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'Contacts', label: 'Contacts', icon: UserPlus },
   { id: 'Conversations', label: 'Conversations', icon: MessageSquare },
   { id: 'Leads', label: 'Leads', icon: Users },
   { id: 'Flows', label: 'Flows', icon: GitBranch },
@@ -56,6 +58,7 @@ export default function DashboardPage() {
   // Chat state
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [messageInput, setMessageInput] = useState('');
+  const [contactForm, setContactForm] = useState({ sender_id: '', name: '', intent: '', area: '' });
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   async function copyToClipboard(text: string, label: string) {
@@ -157,18 +160,43 @@ export default function DashboardPage() {
 
   const conversations = useMemo(() => {
     const map = new Map();
-    leads.forEach(lead => {
-      const lastMsg = chatHistory.filter(m => m.sender_id === lead.sender_id).pop();
-      map.set(lead.sender_id, {
+    const allSenderIds = new Set([
+      ...leads.map((lead) => lead.sender_id),
+      ...chatHistory.map((msg) => msg.sender_id),
+    ]);
+    allSenderIds.forEach((senderId) => {
+      const lead = leads.find((l) => l.sender_id === senderId) || {};
+      const lastMsg = chatHistory.filter((m) => m.sender_id === senderId).pop();
+      map.set(senderId, {
         ...lead,
+        sender_id: senderId,
         lastMessage: lastMsg?.message || (lastMsg?.media_type !== 'text' ? `[${lastMsg?.media_type}]` : 'No messages'),
-        lastMessageTime: lastMsg?.created_at || lead.created_at
+        lastMessageTime: lastMsg?.created_at || lead.created_at || new Date().toISOString()
       });
     });
     return Array.from(map.values()).sort((a, b) => 
       new Date(b.lastMessageTime).getTime() - new Date(a.lastMessageTime).getTime()
     );
   }, [leads, chatHistory]);
+
+  const createContact = async () => {
+    if (!contactForm.sender_id.trim()) {
+      setError('Phone/WhatsApp number is required.');
+      return;
+    }
+    setError('');
+    const res = await fetch(`${API_URL}/api/contacts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(contactForm),
+    });
+    if (!res.ok) {
+      setError('Failed to create contact.');
+      return;
+    }
+    setContactForm({ sender_id: '', name: '', intent: '', area: '' });
+    fetchLeads();
+  };
 
   const stats = useMemo(() => {
     const total = leads.length;
@@ -339,6 +367,55 @@ export default function DashboardPage() {
     </div>
   );
 
+  const renderContacts = () => (
+    <div style={{ display: 'grid', gap: '1.5rem' }}>
+      <div className="stat-card" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
+        <input className="chat-input" placeholder="WhatsApp Number*" value={contactForm.sender_id} onChange={(e) => setContactForm({ ...contactForm, sender_id: e.target.value })} />
+        <input className="chat-input" placeholder="Name" value={contactForm.name} onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })} />
+        <input className="chat-input" placeholder="Intent (Buy/Rent/Sell)" value={contactForm.intent} onChange={(e) => setContactForm({ ...contactForm, intent: e.target.value })} />
+        <input className="chat-input" placeholder="Area" value={contactForm.area} onChange={(e) => setContactForm({ ...contactForm, area: e.target.value })} />
+        <button onClick={createContact} style={{ background: '#c5a059', color: '#000', border: 'none', borderRadius: '8px', padding: '0.7rem 1rem', fontWeight: 700, cursor: 'pointer' }}>
+          Create Contact
+        </button>
+      </div>
+
+      <div className="leads-table-container">
+        <table className="leads-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>WhatsApp</th>
+              <th>Intent</th>
+              <th>Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {leads.map((lead) => (
+              <tr key={lead.id}>
+                <td>{lead.name || 'Unknown'}</td>
+                <td>{lead.sender_id}</td>
+                <td>{lead.intent || 'N/A'}</td>
+                <td><span className="status-badge">{lead.status || 'New'}</span></td>
+                <td>
+                  <button
+                    onClick={() => {
+                      setActiveChatId(lead.sender_id);
+                      setView('Conversations');
+                    }}
+                    style={{ background: '#1a1a1a', color: '#fff', border: '1px solid #333', borderRadius: '8px', padding: '0.4rem 0.75rem', cursor: 'pointer' }}
+                  >
+                    Open Chat
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
   const renderFlows = () => (
     <div className="leads-table-container" style={{ padding: '2rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
@@ -503,6 +580,7 @@ export default function DashboardPage() {
   const renderContent = () => {
     switch (view) {
       case 'Dashboard': return renderDashboard();
+      case 'Contacts': return renderContacts();
       case 'Conversations': return renderConversations();
       case 'Leads': return renderLeads();
       case 'Flows': return renderFlows();

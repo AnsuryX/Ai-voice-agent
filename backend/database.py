@@ -32,16 +32,26 @@ class LeadManager:
         except Exception as e:
             print(f"Error saving message: {e}")
 
-    async def update_lead(self, sender_id: str, name: str = None, intent: str = None, flow_state: str = None, flow_context: dict = None, status: str = None):
+    async def update_lead(
+        self,
+        sender_id: str,
+        name: str = None,
+        intent: str = None,
+        area: str = None,
+        flow_state: str = None,
+        flow_context: dict = None,
+        status: str = None,
+    ):
         if not self.supabase:
             return
 
         data = {"sender_id": sender_id}
-        if name: data["name"] = name
-        if intent: data["intent"] = intent
-        if flow_state: data["flow_state"] = flow_state
-        if flow_context: data["flow_context"] = flow_context
-        if status: data["status"] = status
+        if name is not None: data["name"] = name
+        if intent is not None: data["intent"] = intent
+        if area is not None: data["area"] = area
+        if flow_state is not None: data["flow_state"] = flow_state
+        if flow_context is not None: data["flow_context"] = flow_context
+        if status is not None: data["status"] = status
 
         try:
             self.supabase.table("leads").upsert(data, on_conflict="sender_id").execute()

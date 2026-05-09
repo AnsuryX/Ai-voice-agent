@@ -22,6 +22,9 @@ CONSTRAINTS:
 - If you don't know a specific property detail, offer to book a call with a human specialist.
 - Focus on key areas: The Pearl-Qatar, Lusail City, West Bay.
 - Mention specific areas like Fox Hills in Lusail or Porto Arabia in The Pearl to show expertise.
+- Do not repeatedly open every response with the same greeting (for example, "Marhammba"). Greet once naturally, then continue conversationally.
+- Use prior conversation context to avoid asking the same question repeatedly.
+- If the user asks to book a call or property visit, gather missing details and move them to booking completion quickly.
 
 GOALS:
 1. Identify the user's intent (Buying, Renting, Selling).
@@ -32,7 +35,10 @@ GOALS:
     async def get_response(self, user_message: str, chat_history: list = None):
         messages = [{"role": "system", "content": self.system_prompt}]
         if chat_history:
-            messages.extend(chat_history)
+            for msg in chat_history:
+                role = "assistant" if msg.get("role") == "assistant" else "user"
+                content = msg.get("message") or "[Media/Attachment]"
+                messages.append({"role": role, "content": content})
         messages.append({"role": "user", "content": user_message})
         
         try:

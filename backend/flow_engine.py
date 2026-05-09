@@ -16,14 +16,24 @@ class FlowEngine:
             flow_context["area"] = user_text
             new_state = "awaiting_budget"
             response = "Great! What is your budget range for a property in " + user_text + "?"
-            await self.lead_manager.update_lead(sender_id, area=user_text, flow_state=new_state, flow_context=flow_context)
+            await self.lead_manager.update_lead(
+                sender_id,
+                area=user_text,
+                flow_state=new_state,
+                flow_context=flow_context,
+            )
             return response
 
         if flow_state == "awaiting_budget":
             flow_context["budget"] = user_text
             new_state = "completed"
             response = "Thank you. One of our specialists will contact you soon regarding properties within " + user_text + " in " + flow_context.get("area") + "."
-            await self.lead_manager.update_lead(sender_id, flow_state=None, flow_context=flow_context, status="Qualified")
+            await self.lead_manager.update_lead(
+                sender_id,
+                flow_state="",
+                flow_context=flow_context,
+                status="Qualified",
+            )
             return response
 
         return None
