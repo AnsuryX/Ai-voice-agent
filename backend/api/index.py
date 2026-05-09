@@ -101,6 +101,7 @@ async def handle_webhook(request: Request):
                     if msg.get("type") == "text":
                         user_text = msg["text"]["body"]
                         await lead_manager.save_message(sender_id, user_text, "user")
+                        await lead_manager.update_lead(sender_id)
                         ai_response = await orchestrator.get_response(user_text)
                         await lead_manager.save_message(sender_id, ai_response, "assistant")
                         await send_whatsapp_message(sender_id, ai_response, env)

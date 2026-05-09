@@ -21,9 +21,12 @@ def setup_database():
     # I will provide the SQL for the user to run in their Supabase SQL Editor.
     
     sql_script = """
+    -- Enable pgcrypto for UUID generation
+    CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
     -- Create Leads table
     CREATE TABLE IF NOT EXISTS leads (
-        id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+        id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
         sender_id TEXT UNIQUE NOT NULL,
         name TEXT,
         intent TEXT,
@@ -34,7 +37,7 @@ def setup_database():
 
     -- Create Chat History table
     CREATE TABLE IF NOT EXISTS chat_history (
-        id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+        id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
         sender_id TEXT NOT NULL,
         message TEXT NOT NULL,
         role TEXT NOT NULL, -- 'user' or 'assistant'
