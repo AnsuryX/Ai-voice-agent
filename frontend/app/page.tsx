@@ -33,6 +33,7 @@ const navItems = [
 
 export default function DashboardPage() {
   const [view, setView] = useState('Dashboard');
+  const [settingsView, setSettingsView] = useState('General');
   const [leads, setLeads] = useState<any[]>([]);
   const [chatHistory, setChatHistory] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -356,6 +357,15 @@ export default function DashboardPage() {
     </div>
   );
 
+  const renderAppointments = () => (
+    <div className="leads-table-container" style={{ padding: '2rem' }}>
+      <h3 style={{ marginBottom: '0.5rem' }}>Appointments</h3>
+      <p style={{ color: '#888' }}>
+        Appointment booking details will appear here as soon as users schedule calls.
+      </p>
+    </div>
+  );
+
   const [healthStatus, setHealthStatus] = useState<any>(null);
   const [checkingHealth, setCheckingHealth] = useState(false);
 
@@ -379,33 +389,32 @@ export default function DashboardPage() {
 
   const renderSettings = () => (
     <div className="leads-table-container" style={{ padding: '2rem' }}>
-      <div style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Agent Settings</h3>
-          <p style={{ color: '#888' }}>Configure your WhatsApp integration and automation rules.</p>
-        </div>
-        <button 
-          onClick={checkHealth}
-          disabled={checkingHealth}
-          style={{ background: '#c5a059', color: 'black', border: 'none', padding: '0.6rem 1.2rem', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.8rem' }}
-        >
-          {checkingHealth ? 'Checking...' : 'Run System Health Check'}
-        </button>
+      <div style={{ marginBottom: '2rem' }}>
+        <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Agent Settings</h3>
+        <p style={{ color: '#888' }}>Configure your WhatsApp integration and automation rules.</p>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '1.5rem' }}>
-        {healthStatus && (
-          <div className="stat-card" style={{ gridColumn: '1 / -1', background: '#0d0d0d', borderColor: healthStatus.status === 'Healthy' ? '#4ade80' : '#ff4444' }}>
-            <h4 style={{ marginBottom: '1rem', color: healthStatus.status === 'Healthy' ? '#4ade80' : '#ff4444' }}>System Health Report</h4>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
-              <div><div style={{ color: '#888', fontSize: '0.7rem' }}>Status</div><div style={{ fontWeight: 'bold' }}>{healthStatus.status}</div></div>
-              <div><div style={{ color: '#888', fontSize: '0.7rem' }}>API Latency</div><div style={{ fontWeight: 'bold' }}>{healthStatus.latency}</div></div>
-              <div><div style={{ color: '#888', fontSize: '0.7rem' }}>Database</div><div style={{ fontWeight: 'bold' }}>{healthStatus.database}</div></div>
-              <div><div style={{ color: '#888', fontSize: '0.7rem' }}>Last Check</div><div style={{ fontWeight: 'bold' }}>{healthStatus.timestamp}</div></div>
-            </div>
-          </div>
-        )}
+      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+        {['General', 'Automation', 'System Health'].map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setSettingsView(tab)}
+            style={{
+              border: '1px solid #333',
+              background: settingsView === tab ? '#c5a059' : '#1a1a1a',
+              color: settingsView === tab ? 'black' : '#fff',
+              fontWeight: '600',
+              padding: '0.55rem 0.9rem',
+              borderRadius: '8px',
+              cursor: 'pointer',
+            }}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
 
+      {settingsView === 'General' && (
         <div className="stat-card">
           <h4 style={{ marginBottom: '1rem', color: '#c5a059' }}>WhatsApp Webhook Configuration</h4>
           <div style={{ display: 'grid', gap: '1.25rem' }}>
@@ -426,67 +435,59 @@ export default function DashboardPage() {
           </div>
           {copyStatus && <div style={{ marginTop: '0.75rem', color: '#4ade80', fontSize: '0.8rem' }}>{copyStatus}</div>}
         </div>
+      )}
 
+      {settingsView === 'Automation' && (
         <div className="stat-card">
           <h4 style={{ marginBottom: '1rem', color: '#c5a059' }}>Automation Features</h4>
           <div style={{ display: 'grid', gap: '1rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>AI Auto-Reply (GPT-4o)</span>
-              <button 
-                onClick={() => setAiAutoReply(!aiAutoReply)}
-                style={{ 
-                  background: aiAutoReply ? '#4ade80' : '#666', 
-                  border: 'none', 
-                  padding: '4px 12px', 
-                  borderRadius: '12px', 
-                  fontSize: '0.7rem', 
-                  color: 'black', 
-                  fontWeight: 'bold',
-                  cursor: 'pointer'
-                }}
-              >
+              <button onClick={() => setAiAutoReply(!aiAutoReply)} style={{ background: aiAutoReply ? '#4ade80' : '#666', border: 'none', padding: '4px 12px', borderRadius: '12px', fontSize: '0.7rem', color: 'black', fontWeight: 'bold', cursor: 'pointer' }}>
                 {aiAutoReply ? 'Enabled' : 'Disabled'}
               </button>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>Lead Qualification Flow</span>
-              <button 
-                onClick={() => setLeadQualification(!leadQualification)}
-                style={{ 
-                  background: leadQualification ? '#4ade80' : '#666', 
-                  border: 'none', 
-                  padding: '4px 12px', 
-                  borderRadius: '12px', 
-                  fontSize: '0.7rem', 
-                  color: 'black', 
-                  fontWeight: 'bold',
-                  cursor: 'pointer'
-                }}
-              >
+              <button onClick={() => setLeadQualification(!leadQualification)} style={{ background: leadQualification ? '#4ade80' : '#666', border: 'none', padding: '4px 12px', borderRadius: '12px', fontSize: '0.7rem', color: 'black', fontWeight: 'bold', cursor: 'pointer' }}>
                 {leadQualification ? 'Active' : 'Inactive'}
               </button>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>Multimedia Handling</span>
-              <button 
-                onClick={() => setMultimediaHandling(!multimediaHandling)}
-                style={{ 
-                  background: multimediaHandling ? '#4ade80' : '#666', 
-                  border: 'none', 
-                  padding: '4px 12px', 
-                  borderRadius: '12px', 
-                  fontSize: '0.7rem', 
-                  color: 'black', 
-                  fontWeight: 'bold',
-                  cursor: 'pointer'
-                }}
-              >
+              <button onClick={() => setMultimediaHandling(!multimediaHandling)} style={{ background: multimediaHandling ? '#4ade80' : '#666', border: 'none', padding: '4px 12px', borderRadius: '12px', fontSize: '0.7rem', color: 'black', fontWeight: 'bold', cursor: 'pointer' }}>
                 {multimediaHandling ? 'Active' : 'Inactive'}
               </button>
             </div>
           </div>
         </div>
-      </div>
+      )}
+
+      {settingsView === 'System Health' && (
+        <div className="stat-card">
+          <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <h4 style={{ color: '#c5a059' }}>System Health</h4>
+            <button
+              onClick={checkHealth}
+              disabled={checkingHealth}
+              style={{ background: '#c5a059', color: 'black', border: 'none', padding: '0.6rem 1.2rem', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.8rem' }}
+            >
+              {checkingHealth ? 'Checking...' : 'Run System Health Check'}
+            </button>
+          </div>
+
+          {healthStatus ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '1rem' }}>
+              <div><div style={{ color: '#888', fontSize: '0.7rem' }}>Status</div><div style={{ fontWeight: 'bold', color: healthStatus.status === 'Healthy' ? '#4ade80' : '#ff4444' }}>{healthStatus.status}</div></div>
+              <div><div style={{ color: '#888', fontSize: '0.7rem' }}>API Latency</div><div style={{ fontWeight: 'bold' }}>{healthStatus.latency}</div></div>
+              <div><div style={{ color: '#888', fontSize: '0.7rem' }}>Database</div><div style={{ fontWeight: 'bold' }}>{healthStatus.database}</div></div>
+              <div><div style={{ color: '#888', fontSize: '0.7rem' }}>Last Check</div><div style={{ fontWeight: 'bold' }}>{healthStatus.timestamp}</div></div>
+            </div>
+          ) : (
+            <p style={{ color: '#888' }}>No health checks yet. Run a check to view current status.</p>
+          )}
+        </div>
+      )}
     </div>
   );
 
@@ -496,6 +497,7 @@ export default function DashboardPage() {
       case 'Conversations': return renderConversations();
       case 'Leads': return renderLeads();
       case 'Flows': return renderFlows();
+      case 'Appointments': return renderAppointments();
       case 'Settings': return renderSettings();
       default: return renderDashboard();
     }
