@@ -105,6 +105,7 @@ DEFAULT_FLOWS = [
         "is_active": True,
     },
 ]
+RUNTIME_FLOWS: list[dict] = []
 
 def get_config(key, env=None):
     if env and hasattr(env, key):
@@ -286,22 +287,35 @@ async def bulk_update_contacts(req: BulkActionRequest, request: Request):
 async def list_flows(request: Request):
     env = getattr(request.state, "env", None)
     init_services(env)
-    result = lead_manager.supabase.table("flows").select("*").order("created_at", desc=True).execute()
-    if not result.data:
-        lead_manager.supabase.table("flows").insert(DEFAULT_FLOWS).execute()
+    try:
         result = lead_manager.supabase.table("flows").select("*").order("created_at", desc=True).execute()
-    return result.data or []
+        if not result.data:
+            lead_manager.supabase.table("flows").insert(DEFAULT_FLOWS).execute()
+            result = lead_manager.supabase.table("flows").select("*").order("created_at", desc=True).execute()
+        return result.data or []
+    except Exception:
+        # Fallback when flows table has not been created yet.
+        return (RUNTIME_FLOWS or DEFAULT_FLOWS)
 
 
 @app.post("/api/flows")
 async def create_flow(req: FlowCreateRequest, request: Request):
     env = getattr(request.state, "env", None)
     init_services(env)
-    lead_manager.supabase.table("flows").insert({
+    payload = {
+        "id": f"runtime-{len(RUNTIME_FLOWS)+1}",
         "name": req.name,
         "nodes": req.nodes or [],
         "is_active": req.is_active,
-    }).execute()
+    }
+    try:
+        lead_manager.supabase.table("flows").insert({
+            "name": req.name,
+            "nodes": req.nodes or [],
+            "is_active": req.is_active,
+        }).execute()
+    except Exception:
+        RUNTIME_FLOWS.append(payload)
     return {"status": "created"}
 
 @app.get("/webhook")
