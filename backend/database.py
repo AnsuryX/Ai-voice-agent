@@ -47,6 +47,9 @@ class LeadManager:
         ai_enabled: bool = None,
         health_score: float = None,
         total_cost: float = None,
+        preferences: str = None,
+        language_preference: str = None,
+        failed_intents_count: int = None,
     ):
         if not self.supabase:
             return
@@ -61,18 +64,57 @@ class LeadManager:
         if ai_enabled is not None: data["ai_enabled"] = ai_enabled
         if health_score is not None: data["health_score"] = health_score
         if total_cost is not None: data["total_cost"] = total_cost
+        if preferences is not None: data["preferences"] = preferences
+        if language_preference is not None: data["language_preference"] = language_preference
+        if failed_intents_count is not None: data["failed_intents_count"] = failed_intents_count
+
+        data["last_seen"] = "now()"
 
         try:
             self.supabase.table("leads").upsert(data, on_conflict="sender_id").execute()
         except Exception as e:
             print(f"Error updating lead: {e}")
 
+    async def get_settings(self):
+        if not self.supabase:
+            return None
+        try:
+            response = self.supabase.table("settings").select("*").eq("id", "default").single().execute()
+            return response.data
+        except Exception as e:
+            print(f"Error fetching settings: {e}")
+            return None
+
+    async def update_settings(self, provider: str, model: str):
+        if not self.supabase:
+            return
+        data = {"id": "default", "provider": provider, "model": model, "updated_at": "now()"}
+        try:
+            self.supabase.table("settings").upsert(data).execute()
+        except Exception as e:
+            print(f"Error updating settings: {e}")
+
+    async def log_event(self, level: str, message: str, metadata: dict = None):
+        print(f"[{level}] {message} {metadata or ''}")
+        if not self.supabase:
+            return
+        data = {"level": level, "message": message, "metadata": metadata or {}}
+        try:
+            self.supabase.table("system_logs").insert(data).execute()
+        except Exception as e:
+            print(f"Error saving log to Supabase: {e}")
+
     async def get_chat_history(self, sender_id: str, limit: int = 50):
         if not self.supabase:
             return []
         
         try:
-            response = self.supabase.table("chat_history")                 .select("*")                 .eq("sender_id", sender_id)                 .order("created_at", { "ascending": True })                 .limit(limit)                 .execute()
+            response = self.supabase.table("chat_history") \
+                .select("*") \
+                .eq("sender_id", sender_id) \
+                .order("created_at", { "ascending": True }) \
+                .limit(limit) \
+                .execute()
             return response.data
         except Exception as e:
             print(f"Error fetching chat history: {e}")
@@ -83,7 +125,11 @@ class LeadManager:
             return None
         
         try:
-            response = self.supabase.table("leads")                 .select("*")                 .eq("sender_id", sender_id)                 .single()                 .execute()
+            response = self.supabase.table("leads") \
+                .select("*") \
+                .eq("sender_id", sender_id) \
+                .single() \
+                .execute()
             return response.data
         except Exception as e:
             print(f"Error fetching lead: {e}")
