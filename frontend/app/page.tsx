@@ -419,6 +419,30 @@ export default function DashboardPage() {
 
   const [healthStatus, setHealthStatus] = useState<any>(null);
   const [checkingHealth, setCheckingHealth] = useState(false);
+  const [aiSettings, setAiSettings] = useState({
+    provider: 'groq',
+    model: 'llama-3.3-70b-versatile'
+  });
+  const [savingSettings, setSavingSettings] = useState(false);
+
+  const saveSettings = async (settings: any) => {
+    setSavingSettings(true);
+    try {
+      const response = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings),
+      });
+      if (response.ok) {
+        setAiSettings(settings);
+        setCopyStatus('Settings saved!');
+        setTimeout(() => setCopyStatus(''), 2000);
+      }
+    } catch (err) {
+      console.error('Error saving settings:', err);
+    }
+    setSavingSettings(false);
+  };
 
   const checkHealth = async () => {
     setCheckingHealth(true);
@@ -486,6 +510,36 @@ export default function DashboardPage() {
             </div>
           </div>
           {copyStatus && <div style={{ marginTop: '0.75rem', color: '#4ade80', fontSize: '0.8rem' }}>{copyStatus}</div>}
+        </div>
+
+        <div className="stat-card">
+          <h4 style={{ marginBottom: '1rem', color: '#c5a059' }}>AI Model Selection</h4>
+          <div style={{ display: 'grid', gap: '1rem' }}>
+            <div>
+              <div style={{ fontSize: '0.8rem', color: '#888', marginBottom: '0.4rem' }}>Provider</div>
+              <select 
+                value={aiSettings.provider}
+                onChange={(e) => saveSettings({ ...aiSettings, provider: e.target.value })}
+                style={{ width: '100%', background: '#0d0d0d', color: 'white', border: '1px solid #333', padding: '0.6rem', borderRadius: '8px', fontSize: '0.9rem' }}
+              >
+                <option value="groq">Groq (Fastest)</option>
+                <option value="openai">OpenAI (GPT-4o)</option>
+                <option value="anthropic">Anthropic (Claude 3.5)</option>
+                <option value="openrouter">OpenRouter</option>
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize: '0.8rem', color: '#888', marginBottom: '0.4rem' }}>Model</div>
+              <input 
+                value={aiSettings.model}
+                onChange={(e) => setAiSettings({ ...aiSettings, model: e.target.value })}
+                onBlur={() => saveSettings(aiSettings)}
+                placeholder="e.g. gpt-4o"
+                style={{ width: '100%', background: '#0d0d0d', color: 'white', border: '1px solid #333', padding: '0.6rem', borderRadius: '8px', fontSize: '0.9rem' }}
+              />
+            </div>
+            {savingSettings && <div style={{ fontSize: '0.75rem', color: '#c5a059' }}>Saving changes...</div>}
+          </div>
         </div>
 
         <div className="stat-card">
