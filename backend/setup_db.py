@@ -16,10 +16,6 @@ def setup_database():
 
     print(f"Connecting to Supabase at {url}...")
 
-    # SQL to create tables
-    # Note: Since I can't run raw SQL via the client easily without the service role, 
-    # I will provide the SQL for the user to run in their Supabase SQL Editor.
-    
     sql_script = """
     -- Enable pgcrypto for UUID generation
     CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -32,6 +28,9 @@ def setup_database():
         intent TEXT,
         area TEXT,
         status TEXT DEFAULT 'New',
+        ai_enabled BOOLEAN DEFAULT true,
+        health_score FLOAT DEFAULT 1.0,
+        total_cost FLOAT DEFAULT 0.0,
         flow_state TEXT,
         flow_context JSONB DEFAULT '{}'::jsonb,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -45,6 +44,9 @@ def setup_database():
         role TEXT NOT NULL, -- 'user', 'assistant', or 'system'
         media_url TEXT,
         media_type TEXT, -- 'image', 'video', 'audio', 'document', 'text'
+        latency FLOAT,
+        cost FLOAT,
+        sentiment FLOAT,
         metadata JSONB DEFAULT '{}'::jsonb,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );
