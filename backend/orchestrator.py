@@ -157,9 +157,9 @@ INTERACTION STYLE:
             return response
         
         greetings = [
-            "^(Marhaba|Hello|Hi|Assalam|السلام)[^a-zA-Z]*",
-            "^(Thank you for|Thanks for)[^a-zA-Z]*",
-            "^(Sure|Of course)[,!.]*\s+",
+            r"^(Marhaba|Hello|Hi|Assalam|السلام)[^a-zA-Z]*",
+            r"^(Thank you for|Thanks for)[^a-zA-Z]*",
+            r"^(Sure|Of course)[,!.]*\s+",
         ]
         
         import re
