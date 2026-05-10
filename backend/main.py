@@ -32,6 +32,8 @@ from orchestrator import AIOrchestrator
 from database import LeadManager
 from flow_engine import FlowEngine
 from booking import BookingManager
+from rag_manager import RAGManager
+from google_manager import GoogleWorkspaceManager
 from pydantic import BaseModel
 from typing import Optional
 
@@ -40,12 +42,22 @@ orchestrator = None
 lead_manager = None
 flow_engine = None
 booking_manager = None
+rag_manager = None
+google_manager = None
 
 class MessageRequest(BaseModel):
     recipient_number: str
     message_text: Optional[str] = None
     media_url: Optional[str] = None
     media_type: Optional[str] = "text"
+
+
+class SettingsRequest(BaseModel):
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    openai_key: Optional[str] = None
+    anthropic_key: Optional[str] = None
+    google_sheets_id: Optional[str] = None
 
 
 class ContactRequest(BaseModel):
@@ -113,7 +125,7 @@ def get_config(key, env=None):
     return os.getenv(key)
 
 def init_services(env=None):
-    global orchestrator, lead_manager, flow_engine, booking_manager
+    global orchestrator, lead_manager, flow_engine, booking_manager, rag_manager, google_manager
     if orchestrator is None:
         orchestrator = AIOrchestrator(api_key=get_config("GROQ_API_KEY", env))
     if lead_manager is None:
@@ -125,6 +137,33 @@ def init_services(env=None):
         flow_engine = FlowEngine(lead_manager)
     if booking_manager is None:
         booking_manager = BookingManager()
+    if rag_manager is None:
+        rag_manager = RAGManager(lead_manager.supabase if lead_manager else None)
+    if google_manager is None:
+        google_manager = GoogleWorkspaceManager()
+
+@app.get("/api/keep-alive")
+async def keep_alive(request: Request):
+    """Keep Supabase and the service active"""
+    env = getattr(request.state, "env", None)
+    init_services(env)
+    if lead_manager and lead_manager.supabase:
+        # Simple query to keep Supabase active
+        lead_manager.supabase.table("leads").select("count", count="exact").limit(1).execute()
+    return {"status": "alive", "timestamp": datetime.now().isoformat()}
+
+@app.post("/api/settings")
+async def update_settings(req: SettingsRequest, request: Request):
+    """Update agent settings dynamically"""
+    env = getattr(request.state, "env", None)
+    init_services(env)
+    
+    if req.provider:
+        orchestrator.provider = req.provider
+    if req.model:
+        orchestrator.model = req.model
+    # In a real app, we would save these to a 'settings' table in Supabase
+    return {"status": "updated", "current_provider": orchestrator.provider, "current_model": orchestrator.model}
 
 
 def detect_booking_type(user_text: str):
@@ -408,12 +447,28 @@ async def handle_webhook(request: Request):
                     
                     # 2. If no flow, use AI Orchestrator
                     if not response_text and user_text:
+                        # RAG: Search for relevant properties
+                        properties = await rag_manager.search_properties(user_text)
+                        property_context = rag_manager.format_properties_for_prompt(properties)
+                        
                         chat_history = await lead_manager.get_chat_history(sender_id)
-                        response_text = await orchestrator.get_response(user_text, chat_history)
+                        response_text = await orchestrator.get_response(
+                            user_text, 
+                            chat_history=chat_history,
+                            lead_data=lead_data,
+                            sentiment_context=property_context
+                        )
                     
                     if response_text:
                         await lead_manager.save_message(sender_id, response_text, "assistant")
                         await send_whatsapp_message(sender_id, response_text, env=env)
+                        
+                        # Google Sheets Backup
+                        sheets_id = get_config("GOOGLE_SHEETS_ID", env)
+                        if sheets_id and google_manager:
+                            updated_lead = await lead_manager.get_lead(sender_id)
+                            await google_manager.backup_lead_to_sheets(sheets_id, updated_lead)
+
                         
         return {"status": "success"}
     return {"status": "ignored"}

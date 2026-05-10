@@ -1,16 +1,34 @@
 import os
 from groq import Groq
+from openai import OpenAI
+from anthropic import Anthropic
 from dotenv import load_dotenv
 
 load_dotenv()
 
 class AIOrchestrator:
-    def __init__(self, api_key=None):
-        self.api_key = api_key or os.getenv("GROQ_API_KEY")
-        self.client = Groq(api_key=self.api_key)
-        self.model = "llama-3.3-70b-versatile"
-        # Track which conversations have been greeted
-        self.greeted_conversations = set()
+    def __init__(self, api_key=None, provider=None):
+        self.provider = provider or os.getenv("AI_PROVIDER", "groq")
+        self.model = os.getenv("AI_MODEL")
+        
+        # Initialize clients based on provider
+        if self.provider == "groq":
+            self.client = Groq(api_key=api_key or os.getenv("GROQ_API_KEY"))
+            self.model = self.model or "llama-3.3-70b-versatile"
+        elif self.provider == "openai":
+            self.client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+            self.model = self.model or "gpt-4o"
+        elif self.provider == "anthropic":
+            self.client = Anthropic(api_key=api_key or os.getenv("ANTHROPIC_API_KEY"))
+            self.model = self.model or "claude-3-5-sonnet-20240620"
+        elif self.provider == "openrouter":
+            self.client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=api_key or os.getenv("OPENROUTER_API_KEY"),
+            )
+            self.model = self.model or "openai/gpt-4o"
+        else:
+            raise ValueError(f"Unsupported AI provider: {self.provider}")
 
     def _build_system_prompt(self, lead_data=None, sentiment_context="", previous_messages_count=0):
         """Build context-aware system prompt"""
@@ -47,32 +65,34 @@ INTERACTION STYLE:
 - If they mention frustration: Acknowledge it and offer direct human support.
 """
         
+        # Add dynamic progress info
         if previous_messages_count > 0:
             base_prompt += f"\nUSER ENGAGEMENT: This is message #{previous_messages_count + 1} in the conversation. "
             if previous_messages_count > 5:
                 base_prompt += "Deepen engagement by referencing specifics from earlier in the conversation."
-            elif previous_messages_count >= 3:
-                base_prompt += "You have good context. Be specific and help them move toward a decision."
         
+        # KEY FIX: Inject structured lead data to prevent repetitive questions
         if lead_data:
-            base_prompt += "\n\nCONTEXT ABOUT THIS USER:"
+            base_prompt += "\n\nWHAT WE ALREADY KNOW ABOUT THIS USER (DO NOT ASK AGAIN):"
             if lead_data.get("name"):
                 base_prompt += f"\n- Name: {lead_data['name']}"
             if lead_data.get("intent"):
-                base_prompt += f"\n- Interest: {lead_data['intent']}"
+                base_prompt += f"\n- Intent: {lead_data['intent']} (User already said they want to {lead_data['intent']})"
             if lead_data.get("area"):
-                base_prompt += f"\n- Area preference: {lead_data['area']}"
+                base_prompt += f"\n- Preferred Area: {lead_data['area']}"
             if lead_data.get("status"):
-                base_prompt += f"\n- Current status: {lead_data['status']}"
+                base_prompt += f"\n- Current Status: {lead_data['status']}"
             
             context = lead_data.get("flow_context") or {}
             if context.get("budget"):
                 base_prompt += f"\n- Budget: {context['budget']}"
             if context.get("timeline"):
                 base_prompt += f"\n- Timeline: {context['timeline']}"
+            if context.get("bedrooms"):
+                base_prompt += f"\n- Bedrooms: {context['bedrooms']}"
         
         if sentiment_context:
-            base_prompt += f"\n\n{sentiment_context}"
+            base_prompt += f"\n\nSENTIMENT CONTEXT: {sentiment_context}"
         
         return base_prompt
 
@@ -81,16 +101,8 @@ INTERACTION STYLE:
                           sender_id: str = None):
         """
         Generate contextual, memory-aware response
-        
-        Args:
-            user_message: The current user message
-            chat_history: Previous messages in conversation
-            lead_data: Lead information for context
-            sentiment_context: Sentiment analysis context
-            sender_id: User identifier for greeting tracking
         """
         
-        # Build context-aware system prompt
         messages_count = len(chat_history) if chat_history else 0
         system_prompt = self._build_system_prompt(
             lead_data=lead_data,
@@ -98,46 +110,52 @@ INTERACTION STYLE:
             previous_messages_count=messages_count
         )
         
-        messages = [{"role": "system", "content": system_prompt}]
-        
+        # Prepare messages in standard format
+        messages = []
         if chat_history:
-            # Only include last 15 messages for context (to fit token limits)
-            recent_history = chat_history[-15:] if len(chat_history) > 15 else chat_history
-            
+            # Include last 10 messages for context (keeps it focused)
+            recent_history = chat_history[-10:] if len(chat_history) > 10 else chat_history
             for msg in recent_history:
                 role = "assistant" if msg["role"] == "assistant" else "user"
-                content = msg["message"] or "[Media/Attachment]"
-                messages.append({"role": role, "content": content})
+                content = msg["message"] or ""
+                if content:
+                    messages.append({"role": role, "content": content})
 
         messages.append({"role": "user", "content": user_message})
         
         try:
-            completion = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=0.7,
-                max_tokens=512,  # Shorter, more focused responses
-                top_p=1,
-                stream=False,
-            )
+            if self.provider == "anthropic":
+                completion = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=1024,
+                    system=system_prompt,
+                    messages=messages,
+                    temperature=0.7,
+                )
+                response = completion.content[0].text
+            else:
+                # OpenAI, Groq, and OpenRouter use the same chat completion format
+                completion = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "system", "content": system_prompt}] + messages,
+                    temperature=0.7,
+                    max_tokens=512,
+                )
+                response = completion.choices[0].message.content
             
-            response = completion.choices[0].message.content
-            
-            # Ensure response doesn't start with unnecessary greetings
+            # Clean unwanted greetings for mid-conversation messages
             response = self._clean_greeting(response, messages_count)
-            
             return response
+            
         except Exception as e:
-            print(f"Error calling Groq: {e}")
-            return "I apologize, but I'm having trouble processing your request right now. Please try again in a moment."
+            print(f"Error calling {self.provider}: {e}")
+            return "I apologize, but I'm having trouble processing your request. Let me connect you with a specialist."
 
     def _clean_greeting(self, response: str, message_count: int) -> str:
-        """Remove unnecessary greetings from response"""
+        """Remove unnecessary greetings from response if not the first message"""
         if message_count == 0:
-            # First message - keep greeting
             return response
         
-        # Remove common greeting patterns for follow-up messages
         greetings = [
             "^(Marhaba|Hello|Hi|Assalam|السلام)[^a-zA-Z]*",
             "^(Thank you for|Thanks for)[^a-zA-Z]*",
@@ -148,8 +166,4 @@ INTERACTION STYLE:
         for greeting_pattern in greetings:
             response = re.sub(greeting_pattern, "", response, flags=re.IGNORECASE | re.MULTILINE)
         
-        # Ensure response isn't empty after cleaning
-        if response.strip():
-            return response.strip()
-        
-        return "Let me help you with that."
+        return response.strip() or "How else can I help you today?"
