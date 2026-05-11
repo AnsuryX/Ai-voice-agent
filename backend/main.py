@@ -34,6 +34,8 @@ from flow_engine import FlowEngine
 from booking import BookingManager
 from rag_manager import RAGManager
 from google_manager import GoogleWorkspaceManager
+from sentiment_analyzer import SentimentAnalyzer
+from lead_qualifier import LeadQualifier
 from pydantic import BaseModel
 from typing import Optional
 
@@ -44,6 +46,8 @@ flow_engine = None
 booking_manager = None
 rag_manager = None
 google_manager = None
+sentiment_analyzer = None
+lead_qualifier = None
 
 class MessageRequest(BaseModel):
     recipient_number: str
@@ -125,7 +129,7 @@ def get_config(key, env=None):
     return os.getenv(key)
 
 def init_services(env=None):
-    global orchestrator, lead_manager, flow_engine, booking_manager, rag_manager, google_manager
+    global orchestrator, lead_manager, flow_engine, booking_manager, rag_manager, google_manager, sentiment_analyzer, lead_qualifier
     if orchestrator is None:
         orchestrator = AIOrchestrator(api_key=get_config("GROQ_API_KEY", env))
     if lead_manager is None:
@@ -141,6 +145,10 @@ def init_services(env=None):
         rag_manager = RAGManager(lead_manager.supabase if lead_manager else None)
     if google_manager is None:
         google_manager = GoogleWorkspaceManager()
+    if sentiment_analyzer is None:
+        sentiment_analyzer = SentimentAnalyzer()
+    if lead_qualifier is None:
+        lead_qualifier = LeadQualifier()
 
 @app.get("/api/keep-alive")
 async def keep_alive(request: Request):
@@ -407,6 +415,32 @@ async def handle_webhook(request: Request):
 
                     # Save incoming message
                     await lead_manager.save_message(sender_id, user_text, "user", media_url, media_type)
+
+                    # Analyze sentiment
+                    sentiment_score, sentiment_type, needs_human = sentiment_analyzer.analyze(user_text or "")
+                    
+                    # Check if should escalate to human
+                    chat_history = await lead_manager.get_chat_history(sender_id)
+                    qualification_score = lead_qualifier.calculate_score(lead_data, chat_history)
+                    
+                    should_escalate = (
+                        needs_human or 
+                        sentiment_type in ['angry', 'frustrated'] or
+                        qualification_score >= 75
+                    )
+                    
+                    if should_escalate and lead_data.get("flow_state") != "human_handoff":
+                        print(f"🔴 Escalating {sender_id}: sentiment={sentiment_type}, score={qualification_score}")
+                        await lead_manager.update_lead(
+                            sender_id,
+                            status="Escalated - Awaiting Agent",
+                            flow_state="human_handoff",
+                            flow_context={**(lead_data.get("flow_context") or {}), "qualification_score": qualification_score}
+                        )
+                        response_text = "Let me connect you with our specialist team who can better assist you. Please hold on..."
+                        await lead_manager.save_message(sender_id, response_text, "assistant")
+                        await send_whatsapp_message(sender_id, response_text, env=env)
+                        continue
 
                     booking_type = detect_booking_type(user_text or "")
                     if booking_type:

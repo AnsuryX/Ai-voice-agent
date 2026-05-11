@@ -41,6 +41,7 @@ export default function DashboardPage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [copyStatus, setCopyStatus] = useState('');
   
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://qatar-real-estate-bot.vercel.app';
   const webhookUrl = 'https://qatar-real-estate-bot.vercel.app/webhook';
   const verifyToken = 'qatar_re_verify_2026';
 
@@ -115,6 +116,7 @@ export default function DashboardPage() {
   };
 
   async function fetchLeads() {
+    if (!supabase) return;
     setLoading(true);
     const { data, error } = await supabase
       .from('leads')
@@ -126,6 +128,7 @@ export default function DashboardPage() {
   }
 
   async function fetchChatHistory() {
+    if (!supabase) return;
     const { data, error } = await supabase
       .from('chat_history')
       .select('*')
@@ -135,13 +138,17 @@ export default function DashboardPage() {
   }
 
   async function fetchFlows() {
+    if (!supabase) return;
     try {
-      const response = await fetch('/api/flows');
-      if (!response.ok) throw new Error('Failed to fetch flows');
-      const data = await response.json();
+      const { data, error } = await supabase
+        .from('flows')
+        .select('*')
+        .order('created_at', { ascending: false });
+      
+      if (error) throw error;
       setFlows(data || []);
     } catch (err) {
-      console.error('Error fetching flows:', err);
+      console.error('Error fetching flows from Supabase:', err);
     }
   }
 
@@ -152,7 +159,7 @@ export default function DashboardPage() {
     setMessageInput('');
 
     try {
-      const response = await fetch('/api/send-message', {
+      const response = await fetch(`${API_URL}/api/send-message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -160,7 +167,6 @@ export default function DashboardPage() {
           message_text: message,
         }),
       });
-
       if (!response.ok) {
         throw new Error('Failed to send message');
       }
@@ -425,19 +431,35 @@ export default function DashboardPage() {
   });
   const [savingSettings, setSavingSettings] = useState(false);
 
+  useEffect(() => {
+    async function loadSettings() {
+      if (!supabase) return;
+      const { data, error } = await supabase
+        .from('settings')
+        .select('*')
+        .eq('id', 'default_settings')
+        .single();
+      
+      if (!error && data) {
+        setAiSettings({ provider: data.provider, model: data.model });
+      }
+    }
+    loadSettings();
+  }, []);
+
   const saveSettings = async (settings: any) => {
+    if (!supabase) return;
     setSavingSettings(true);
     try {
-      const response = await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings),
-      });
-      if (response.ok) {
-        setAiSettings(settings);
-        setCopyStatus('Settings saved!');
-        setTimeout(() => setCopyStatus(''), 2000);
-      }
+      const { error } = await supabase
+        .from('settings')
+        .upsert({ id: 'default_settings', ...settings });
+
+      if (error) throw error;
+
+      setAiSettings(settings);
+      setCopyStatus('Settings saved!');
+      setTimeout(() => setCopyStatus(''), 2000);
     } catch (err) {
       console.error('Error saving settings:', err);
     }

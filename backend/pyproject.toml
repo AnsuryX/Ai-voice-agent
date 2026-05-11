@@ -8,7 +8,12 @@ dependencies = [
     "supabase",
     "python-dotenv",
     "pydantic",
-    "python-multipart"
+    "python-multipart",
+    "openai",
+    "anthropic",
+    "google-api-python-client",
+    "google-auth-httplib2",
+    "google-auth-oauthlib"
 ]
 
 [dependency-groups]

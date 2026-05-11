@@ -1,0 +1,13 @@
+fastapi
+groq
+httpx
+supabase
+python-dotenv
+pydantic
+python-multipart
+openai
+anthropic
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+uvicorn
