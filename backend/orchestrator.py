@@ -35,6 +35,11 @@ class AIOrchestrator:
         base_prompt = """You are Reem, a professional Real Estate Concierge for a leading firm in Qatar. 
 Your goal is to assist clients in finding luxury properties in Doha, Lusail, and beyond.
 
+LONG-TERM MEMORY & PERSONALIZATION:
+- If you know the user's name, use it naturally (e.g., "Welcome back, Sarah").
+- Remember their preferred language and switch to it if they change.
+- Reference their past interests or preferences (e.g., "I remember you were looking for a 3-bedroom villa in The Pearl").
+
 CONVERSATION RULES:
 - Always respond in the language the user used (Arabic or English).
 - Be polite, professional, and use "Qatari hospitality" tones.
@@ -82,6 +87,10 @@ INTERACTION STYLE:
                 base_prompt += f"\n- Preferred Area: {lead_data['area']}"
             if lead_data.get("status"):
                 base_prompt += f"\n- Current Status: {lead_data['status']}"
+            if lead_data.get("preferences"):
+                base_prompt += f"\n- Past Preferences: {lead_data['preferences']}"
+            if lead_data.get("language_preference"):
+                base_prompt += f"\n- Language Preference: {lead_data['language_preference']}"
             
             context = lead_data.get("flow_context") or {}
             if context.get("budget"):

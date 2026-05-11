@@ -7,6 +7,7 @@ import {
   MessageSquare,
   TrendingUp,
   Search,
+  Home,
   LayoutDashboard,
   Settings,
   LogOut,
@@ -25,6 +26,7 @@ const navItems = [
   { id: 'Dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'Conversations', label: 'Conversations', icon: MessageSquare },
   { id: 'Leads', label: 'Leads', icon: Users },
+  { id: 'Properties', label: 'Properties', icon: Home },
   { id: 'Flows', label: 'Flows', icon: GitBranch },
   { id: 'Appointments', label: 'Appointments', icon: Calendar },
 ];
@@ -38,15 +40,26 @@ export default function DashboardPage() {
   const [selectedLead, setSelectedLead] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [properties, setProperties] = useState<any[]>([]);
+  const [isNewPropertyModalOpen, setIsNewPropertyModalOpen] = useState(false);
+  const [newProperty, setNewProperty] = useState({ title: '', area: '', price: '', description: '', type: 'Apartment' });
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [copyStatus, setCopyStatus] = useState('');
   
+<<<<<<< HEAD
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://qatar-real-estate-bot.vercel.app';
   const webhookUrl = 'https://qatar-real-estate-bot.vercel.app/webhook';
+=======
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+  const webhookUrl = `${backendUrl}/webhook`;
+>>>>>>> 85d76a84e4e9db523aee8e456bba1a78f728c0dd
   const verifyToken = 'qatar_re_verify_2026';
 
   // Chat state
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [isNewContactModalOpen, setIsNewContactModalOpen] = useState(false);
+  const [newContact, setNewContact] = useState({ name: "", sender_id: "", intent: "Buy" });
+  const [isTemplateMenuOpen, setIsTemplateMenuOpen] = useState(false);
   const [messageInput, setMessageInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -69,41 +82,50 @@ export default function DashboardPage() {
     fetchLeads();
     fetchChatHistory();
     fetchFlows();
+    fetchProperties();
 
-    const leadsSubscription = supabase
-      .channel('leads-channel')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, (payload) => {
-        console.log('Leads updated:', payload);
-        fetchLeads();
-      })
-      .subscribe((status) => {
-        console.log('Leads subscription status:', status);
-      });
+    let leadsSubscription: any = null;
+    let chatSubscription: any = null;
+    let flowsSubscription: any = null;
 
-    const chatSubscription = supabase
-      .channel('chat-channel')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_history' }, (payload) => {
-        console.log('Chat history updated:', payload);
-        fetchChatHistory();
-      })
-      .subscribe((status) => {
-        console.log('Chat subscription status:', status);
-      });
+    if (supabase) {
+      leadsSubscription = supabase
+        .channel('leads-channel')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, (payload) => {
+          console.log('Leads updated:', payload);
+          fetchLeads();
+        })
+        .subscribe((status) => {
+          console.log('Leads subscription status:', status);
+        });
 
-    const flowsSubscription = supabase
-      .channel('flows-channel')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'flows' }, (payload) => {
-        console.log('Flows updated:', payload);
-        fetchFlows();
-      })
-      .subscribe((status) => {
-        console.log('Flows subscription status:', status);
-      });
+      chatSubscription = supabase
+        .channel('chat-channel')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_history' }, (payload) => {
+          console.log('Chat history updated:', payload);
+          fetchChatHistory();
+        })
+        .subscribe((status) => {
+          console.log('Chat subscription status:', status);
+        });
+
+      flowsSubscription = supabase
+        .channel('flows-channel')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'flows' }, (payload) => {
+          console.log('Flows updated:', payload);
+          fetchFlows();
+        })
+        .subscribe((status) => {
+          console.log('Flows subscription status:', status);
+        });
+    }
 
     return () => {
-      supabase.removeChannel(leadsSubscription);
-      supabase.removeChannel(chatSubscription);
-      supabase.removeChannel(flowsSubscription);
+      if (supabase) {
+        if (leadsSubscription) supabase.removeChannel(leadsSubscription);
+        if (chatSubscription) supabase.removeChannel(chatSubscription);
+        if (flowsSubscription) supabase.removeChannel(flowsSubscription);
+      }
     };
   }, []);
 
@@ -118,16 +140,20 @@ export default function DashboardPage() {
   async function fetchLeads() {
     if (!supabase) return;
     setLoading(true);
-    const { data, error } = await supabase
-      .from('leads')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (!error) setLeads(data || []);
+    try {
+      const response = await fetch(`${backendUrl}/api/contacts`);
+      if (response.ok) {
+        const data = await response.json();
+        setLeads(data || []);
+      }
+    } catch (err) {
+      console.error('Error fetching leads:', err);
+    }
     setLoading(false);
   }
 
   async function fetchChatHistory() {
+<<<<<<< HEAD
     if (!supabase) return;
     const { data, error } = await supabase
       .from('chat_history')
@@ -135,22 +161,85 @@ export default function DashboardPage() {
       .order('created_at', { ascending: true });
 
     if (!error) setChatHistory(data || []);
+=======
+    try {
+      const response = await fetch(`${backendUrl}/api/chat/all`);
+      if (response.ok) {
+        const data = await response.json();
+        setChatHistory(data || []);
+      }
+    } catch (err) {
+      console.error('Error fetching chat history:', err);
+    }
+>>>>>>> 85d76a84e4e9db523aee8e456bba1a78f728c0dd
   }
 
   async function fetchFlows() {
     if (!supabase) return;
     try {
+<<<<<<< HEAD
       const { data, error } = await supabase
         .from('flows')
         .select('*')
         .order('created_at', { ascending: false });
       
       if (error) throw error;
+=======
+      const response = await fetch(`${backendUrl}/api/flows`) ;
+      if (!response.ok) throw new Error('Failed to fetch flows');
+      const data = await response.json();
+>>>>>>> 85d76a84e4e9db523aee8e456bba1a78f728c0dd
       setFlows(data || []);
     } catch (err) {
       console.error('Error fetching flows from Supabase:', err);
     }
   }
+
+  async function fetchProperties() {
+    try {
+      const response = await fetch(`${backendUrl}/api/properties`);
+      if (response.ok) {
+        const data = await response.json();
+        setProperties(data || []);
+      }
+    } catch (err) {
+      console.error('Error fetching properties:', err);
+    }
+  }
+
+  const handleCreateContact = async () => {
+    if (!newContact.name || !newContact.sender_id) return;
+    setLoading(true);
+    try {
+      const response = await fetch(`${backendUrl}/api/contacts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newContact),
+      });
+      if (response.ok) {
+        setIsNewContactModalOpen(false);
+        setNewContact({ name: '', sender_id: '', intent: 'Buy' });
+        fetchLeads();
+      }
+    } catch (err) { console.error(err); }
+    setLoading(false);
+  };
+
+  const sendTemplate = async (templateName: string) => {
+    if (!activeChatId) return;
+    setIsTemplateMenuOpen(false);
+    try {
+      await fetch(`${backendUrl}/api/send-message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipient_number: activeChatId,
+          template_name: templateName,
+          language_code: 'en_US'
+        }),
+      });
+    } catch (err) { console.error(err); }
+  };
 
   const handleSendMessage = async () => {
     if (!messageInput.trim() || !activeChatId) return;
@@ -159,7 +248,11 @@ export default function DashboardPage() {
     setMessageInput('');
 
     try {
+<<<<<<< HEAD
       const response = await fetch(`${API_URL}/api/send-message`, {
+=======
+      const response = await fetch(`${backendUrl}/api/send-message`, {
+>>>>>>> 85d76a84e4e9db523aee8e456bba1a78f728c0dd
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -221,7 +314,7 @@ export default function DashboardPage() {
       { label: 'Total Leads', value: total.toString(), icon: Users },
       { label: 'New Today', value: today.toString(), icon: TrendingUp },
       { label: 'Booked Calls', value: booked.toString(), icon: Calendar },
-      { label: 'Active Chats', value: leads.length.toString(), icon: MessageSquare },
+      { label: 'Total AI Cost', value: `$${leads.reduce((acc, lead) => acc + (lead.total_cost || 0), 0).toFixed(4)}`, icon: MessageSquare },
     ];
   }, [leads]);
 
@@ -300,7 +393,43 @@ export default function DashboardPage() {
                     <div style={{ fontSize: '0.75rem', color: '#4ade80' }}>Online</div>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: '1.25rem' }}>
+                <div style={{ display: 'flex', gap: '1.25rem', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#1a1a1a', padding: '0.4rem 0.8rem', borderRadius: '20px', border: '1px solid #333' }}>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: activeLead?.ai_enabled !== false ? '#4ade80' : '#888' }}>
+                      {activeLead?.ai_enabled !== false ? 'AI ON' : 'AI OFF'}
+                    </span>
+                    <button
+                      onClick={async () => {
+                        const newState = activeLead?.ai_enabled === false;
+                        await fetch(`${backendUrl}/api/contacts/${activeChatId}`, {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ ai_enabled: newState }),
+                        });
+                        fetchLeads();
+                      }}
+                      style={{
+                        width: '36px',
+                        height: '18px',
+                        background: activeLead?.ai_enabled !== false ? '#4ade80' : '#333',
+                        borderRadius: '10px',
+                        position: 'relative',
+                        border: 'none',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <div style={{
+                        width: '14px',
+                        height: '14px',
+                        background: 'white',
+                        borderRadius: '50%',
+                        position: 'absolute',
+                        top: '2px',
+                        left: activeLead?.ai_enabled !== false ? '20px' : '2px',
+                        transition: 'left 0.2s'
+                      }} />
+                    </button>
+                  </div>
                   <button className="icon-button"><Phone size={20} /></button>
                   <button className="icon-button"><Video size={20} /></button>
                   <button className="icon-button"><MoreVertical size={20} /></button>
@@ -354,6 +483,10 @@ export default function DashboardPage() {
 
   const renderLeads = () => (
     <div className="leads-table-container">
+      <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid #333', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h3 style={{ margin: 0 }}>All Leads</h3>
+        <button onClick={() => setIsNewContactModalOpen(true)} style={{ background: '#c5a059', color: 'black', border: 'none', padding: '0.5rem 1rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.8rem' }}>+ New Contact</button>
+      </div>
       <table className="leads-table">
         <thead>
           <tr>
@@ -372,6 +505,65 @@ export default function DashboardPage() {
               <td>{lead.area || 'N/A'}</td>
               <td>{lead.intent || 'N/A'}</td>
               <td><span className="status-badge">{lead.status}</span></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const handleCreateProperty = async () => {
+    if (!newProperty.title) return;
+    setLoading(true);
+    try {
+      const response = await fetch(`${backendUrl}/api/properties`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newProperty),
+      });
+      if (response.ok) {
+        setIsNewPropertyModalOpen(false);
+        setNewProperty({ title: '', area: '', price: '', description: '', type: 'Apartment' });
+        fetchProperties();
+      }
+    } catch (err) { console.error(err); }
+    setLoading(false);
+  };
+
+  const renderProperties = () => (
+    <div className="leads-table-container">
+      <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid #333', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h3 style={{ margin: 0 }}>Property Listings (RAG Knowledge Base)</h3>
+        <button onClick={() => setIsNewPropertyModalOpen(true)} style={{ background: '#c5a059', color: 'black', border: 'none', padding: '0.5rem 1rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.8rem' }}>+ Add Property</button>
+      </div>
+      <table className="leads-table">
+        <thead>
+          <tr>
+            <th>Title</th>
+            <th>Area</th>
+            <th>Price (QAR)</th>
+            <th>Type</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {properties.map((prop) => (
+            <tr key={prop.id}>
+              <td style={{ fontWeight: '500' }}>{prop.title}</td>
+              <td>{prop.area}</td>
+              <td>{prop.price?.toLocaleString()}</td>
+              <td>{prop.type}</td>
+              <td>
+                <button
+                  onClick={async () => {
+                    await fetch(`${backendUrl}/api/properties/${prop.id}`, { method: 'DELETE' });
+                    fetchProperties();
+                  }}
+                  style={{ background: 'transparent', color: '#ff4444', border: 'none', cursor: 'pointer', fontSize: '0.8rem' }}
+                >
+                  Delete
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -451,6 +643,7 @@ export default function DashboardPage() {
     if (!supabase) return;
     setSavingSettings(true);
     try {
+<<<<<<< HEAD
       const { error } = await supabase
         .from('settings')
         .upsert({ id: 'default_settings', ...settings });
@@ -460,6 +653,18 @@ export default function DashboardPage() {
       setAiSettings(settings);
       setCopyStatus('Settings saved!');
       setTimeout(() => setCopyStatus(''), 2000);
+=======
+      const response = await fetch(`${backendUrl}/api/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings),
+      });
+      if (response.ok) {
+        setAiSettings(settings);
+        setCopyStatus('Settings saved!');
+        setTimeout(() => setCopyStatus(''), 2000);
+      }
+>>>>>>> 85d76a84e4e9db523aee8e456bba1a78f728c0dd
     } catch (err) {
       console.error('Error saving settings:', err);
     }
@@ -468,18 +673,21 @@ export default function DashboardPage() {
 
   const checkHealth = async () => {
     setCheckingHealth(true);
+    const startTime = Date.now();
     try {
-      const res = await fetch('https://qatar-real-estate-bot.vercel.app/');
+      const res = await fetch(`${backendUrl}/`);
       const data = await res.json();
+      const latency = Date.now() - startTime;
       setHealthStatus({
         status: data.status === 'online' ? 'Healthy' : 'Degraded',
-        latency: '45ms',
+        latency: `${latency}ms`,
         backend: 'Connected',
-        database: 'Connected',
-        timestamp: new Date().toLocaleTimeString()
+        database: data.database || 'Unknown',
+        ai_agent: data.ai_agent || 'Unknown',
+        timestamp: new Date(data.timestamp).toLocaleTimeString()
       });
     } catch (err) {
-      setHealthStatus({ status: 'Offline', backend: 'Error' });
+      setHealthStatus({ status: 'Offline', backend: 'Error', database: 'Disconnected', ai_agent: 'Offline', timestamp: new Date().toLocaleTimeString() });
     }
     setCheckingHealth(false);
   };
@@ -504,10 +712,11 @@ export default function DashboardPage() {
         {healthStatus && (
           <div className="stat-card" style={{ gridColumn: '1 / -1', background: '#0d0d0d', borderColor: healthStatus.status === 'Healthy' ? '#4ade80' : '#ff4444' }}>
             <h4 style={{ marginBottom: '1rem', color: healthStatus.status === 'Healthy' ? '#4ade80' : '#ff4444' }}>System Health Report</h4>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '1rem' }}>
               <div><div style={{ color: '#888', fontSize: '0.7rem' }}>Status</div><div style={{ fontWeight: 'bold' }}>{healthStatus.status}</div></div>
               <div><div style={{ color: '#888', fontSize: '0.7rem' }}>API Latency</div><div style={{ fontWeight: 'bold' }}>{healthStatus.latency}</div></div>
               <div><div style={{ color: '#888', fontSize: '0.7rem' }}>Database</div><div style={{ fontWeight: 'bold' }}>{healthStatus.database}</div></div>
+              <div><div style={{ color: '#888', fontSize: '0.7rem' }}>AI Agent</div><div style={{ fontWeight: 'bold' }}>{healthStatus.ai_agent}</div></div>
               <div><div style={{ color: '#888', fontSize: '0.7rem' }}>Last Check</div><div style={{ fontWeight: 'bold' }}>{healthStatus.timestamp}</div></div>
             </div>
           </div>
@@ -590,6 +799,7 @@ export default function DashboardPage() {
       case 'Dashboard': return renderDashboard();
       case 'Conversations': return renderConversations();
       case 'Leads': return renderLeads();
+      case 'Properties': return renderProperties();
       case 'Flows': return renderFlows();
       case 'Settings': return renderSettings();
       default: return renderDashboard();
@@ -668,6 +878,52 @@ export default function DashboardPage() {
 
         {renderContent()}
       </main>
+      {isNewContactModalOpen && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ background: '#111', border: '1px solid #333', borderRadius: '12px', width: '400px', padding: '2rem' }}>
+            <h2 style={{ marginBottom: '1.5rem', color: '#c5a059' }}>Create New Contact</h2>
+            <div style={{ display: 'grid', gap: '1.25rem' }}>
+              <input className="chat-input" value={newContact.name} onChange={e => setNewContact({...newContact, name: e.target.value})} placeholder="Full Name" style={{ width: '100%' }} />
+              <input className="chat-input" value={newContact.sender_id} onChange={e => setNewContact({...newContact, sender_id: e.target.value})} placeholder="Phone Number" style={{ width: '100%' }} />
+              <select className="chat-input" value={newContact.intent} onChange={e => setNewContact({...newContact, intent: e.target.value})} style={{ width: '100%', background: '#000', color: 'white' }}>
+                <option value="Buy">Buy</option><option value="Rent">Rent</option><option value="Sell">Sell</option><option value="Invest">Invest</option>
+              </select>
+              <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+                <button onClick={() => setIsNewContactModalOpen(false)} style={{ flex: 1, background: 'transparent', color: '#888', border: '1px solid #333', padding: '0.75rem', borderRadius: '8px' }}>Cancel</button>
+                <button onClick={handleCreateContact} style={{ flex: 1, background: '#c5a059', color: 'black', border: 'none', padding: '0.75rem', borderRadius: '8px', fontWeight: 'bold' }}>Create</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {isNewPropertyModalOpen && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ background: '#111', border: '1px solid #333', borderRadius: '12px', width: '500px', padding: '2rem' }}>
+            <h2 style={{ marginBottom: '1.5rem', color: '#c5a059' }}>Add New Property</h2>
+            <div style={{ display: 'grid', gap: '1.25rem' }}>
+              <input className="chat-input" value={newProperty.title} onChange={e => setNewProperty({...newProperty, title: e.target.value})} placeholder="Property Title (e.g. Luxury 3BR Villa)" style={{ width: '100%' }} />
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <input className="chat-input" value={newProperty.area} onChange={e => setNewProperty({...newProperty, area: e.target.value})} placeholder="Area (e.g. The Pearl)" style={{ flex: 1 }} />
+                <input className="chat-input" type="number" value={newProperty.price} onChange={e => setNewProperty({...newProperty, price: e.target.value})} placeholder="Price (QAR)" style={{ flex: 1 }} />
+              </div>
+              <select className="chat-input" value={newProperty.type} onChange={e => setNewProperty({...newProperty, type: e.target.value})} style={{ width: '100%', background: '#000', color: 'white' }}>
+                <option value="Apartment">Apartment</option><option value="Villa">Villa</option><option value="Penthouse">Penthouse</option><option value="Townhouse">Townhouse</option>
+              </select>
+              <textarea
+                className="chat-input"
+                value={newProperty.description}
+                onChange={e => setNewProperty({...newProperty, description: e.target.value})}
+                placeholder="Detailed description for AI training..."
+                style={{ width: '100%', height: '100px', resize: 'none' }}
+              />
+              <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+                <button onClick={() => setIsNewPropertyModalOpen(false)} style={{ flex: 1, background: 'transparent', color: '#888', border: '1px solid #333', padding: '0.75rem', borderRadius: '8px' }}>Cancel</button>
+                <button onClick={handleCreateProperty} style={{ flex: 1, background: '#c5a059', color: 'black', border: 'none', padding: '0.75rem', borderRadius: '8px', fontWeight: 'bold' }}>Add Property</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
