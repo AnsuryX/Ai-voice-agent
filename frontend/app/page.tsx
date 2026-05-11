@@ -7,6 +7,7 @@ import {
   MessageSquare,
   TrendingUp,
   Search,
+  Home,
   LayoutDashboard,
   Settings,
   LogOut,
@@ -25,6 +26,7 @@ const navItems = [
   { id: 'Dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'Conversations', label: 'Conversations', icon: MessageSquare },
   { id: 'Leads', label: 'Leads', icon: Users },
+  { id: 'Properties', label: 'Properties', icon: Home },
   { id: 'Flows', label: 'Flows', icon: GitBranch },
   { id: 'Appointments', label: 'Appointments', icon: Calendar },
 ];
@@ -38,6 +40,9 @@ export default function DashboardPage() {
   const [selectedLead, setSelectedLead] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [properties, setProperties] = useState<any[]>([]);
+  const [isNewPropertyModalOpen, setIsNewPropertyModalOpen] = useState(false);
+  const [newProperty, setNewProperty] = useState({ title: '', area: '', price: '', description: '', type: 'Apartment' });
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [copyStatus, setCopyStatus] = useState('');
   
@@ -72,6 +77,7 @@ export default function DashboardPage() {
     fetchLeads();
     fetchChatHistory();
     fetchFlows();
+    fetchProperties();
 
     let leadsSubscription: any = null;
     let chatSubscription: any = null;
@@ -141,9 +147,8 @@ export default function DashboardPage() {
   }
 
   async function fetchChatHistory() {
-    if (!activeChatId) return;
     try {
-      const response = await fetch(`${backendUrl}/api/chat/${activeChatId}`);
+      const response = await fetch(`${backendUrl}/api/chat/all`);
       if (response.ok) {
         const data = await response.json();
         setChatHistory(data || []);
@@ -161,6 +166,18 @@ export default function DashboardPage() {
       setFlows(data || []);
     } catch (err) {
       console.error('Error fetching flows:', err);
+    }
+  }
+
+  async function fetchProperties() {
+    try {
+      const response = await fetch(`${backendUrl}/api/properties`);
+      if (response.ok) {
+        const data = await response.json();
+        setProperties(data || []);
+      }
+    } catch (err) {
+      console.error('Error fetching properties:', err);
     }
   }
 
@@ -466,6 +483,65 @@ export default function DashboardPage() {
     </div>
   );
 
+  const handleCreateProperty = async () => {
+    if (!newProperty.title) return;
+    setLoading(true);
+    try {
+      const response = await fetch(`${backendUrl}/api/properties`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newProperty),
+      });
+      if (response.ok) {
+        setIsNewPropertyModalOpen(false);
+        setNewProperty({ title: '', area: '', price: '', description: '', type: 'Apartment' });
+        fetchProperties();
+      }
+    } catch (err) { console.error(err); }
+    setLoading(false);
+  };
+
+  const renderProperties = () => (
+    <div className="leads-table-container">
+      <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid #333', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h3 style={{ margin: 0 }}>Property Listings (RAG Knowledge Base)</h3>
+        <button onClick={() => setIsNewPropertyModalOpen(true)} style={{ background: '#c5a059', color: 'black', border: 'none', padding: '0.5rem 1rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.8rem' }}>+ Add Property</button>
+      </div>
+      <table className="leads-table">
+        <thead>
+          <tr>
+            <th>Title</th>
+            <th>Area</th>
+            <th>Price (QAR)</th>
+            <th>Type</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {properties.map((prop) => (
+            <tr key={prop.id}>
+              <td style={{ fontWeight: '500' }}>{prop.title}</td>
+              <td>{prop.area}</td>
+              <td>{prop.price?.toLocaleString()}</td>
+              <td>{prop.type}</td>
+              <td>
+                <button
+                  onClick={async () => {
+                    await fetch(`${backendUrl}/api/properties/${prop.id}`, { method: 'DELETE' });
+                    fetchProperties();
+                  }}
+                  style={{ background: 'transparent', color: '#ff4444', border: 'none', cursor: 'pointer', fontSize: '0.8rem' }}
+                >
+                  Delete
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
   const renderFlows = () => (
     <div className="leads-table-container" style={{ padding: '2rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
@@ -549,10 +625,11 @@ export default function DashboardPage() {
         latency: `${latency}ms`,
         backend: 'Connected',
         database: data.database || 'Unknown',
+        ai_agent: data.ai_agent || 'Unknown',
         timestamp: new Date(data.timestamp).toLocaleTimeString()
       });
     } catch (err) {
-      setHealthStatus({ status: 'Offline', backend: 'Error', database: 'Disconnected', timestamp: new Date().toLocaleTimeString() });
+      setHealthStatus({ status: 'Offline', backend: 'Error', database: 'Disconnected', ai_agent: 'Offline', timestamp: new Date().toLocaleTimeString() });
     }
     setCheckingHealth(false);
   };
@@ -577,10 +654,11 @@ export default function DashboardPage() {
         {healthStatus && (
           <div className="stat-card" style={{ gridColumn: '1 / -1', background: '#0d0d0d', borderColor: healthStatus.status === 'Healthy' ? '#4ade80' : '#ff4444' }}>
             <h4 style={{ marginBottom: '1rem', color: healthStatus.status === 'Healthy' ? '#4ade80' : '#ff4444' }}>System Health Report</h4>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '1rem' }}>
               <div><div style={{ color: '#888', fontSize: '0.7rem' }}>Status</div><div style={{ fontWeight: 'bold' }}>{healthStatus.status}</div></div>
               <div><div style={{ color: '#888', fontSize: '0.7rem' }}>API Latency</div><div style={{ fontWeight: 'bold' }}>{healthStatus.latency}</div></div>
               <div><div style={{ color: '#888', fontSize: '0.7rem' }}>Database</div><div style={{ fontWeight: 'bold' }}>{healthStatus.database}</div></div>
+              <div><div style={{ color: '#888', fontSize: '0.7rem' }}>AI Agent</div><div style={{ fontWeight: 'bold' }}>{healthStatus.ai_agent}</div></div>
               <div><div style={{ color: '#888', fontSize: '0.7rem' }}>Last Check</div><div style={{ fontWeight: 'bold' }}>{healthStatus.timestamp}</div></div>
             </div>
           </div>
@@ -663,6 +741,7 @@ export default function DashboardPage() {
       case 'Dashboard': return renderDashboard();
       case 'Conversations': return renderConversations();
       case 'Leads': return renderLeads();
+      case 'Properties': return renderProperties();
       case 'Flows': return renderFlows();
       case 'Settings': return renderSettings();
       default: return renderDashboard();
@@ -754,6 +833,34 @@ export default function DashboardPage() {
               <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
                 <button onClick={() => setIsNewContactModalOpen(false)} style={{ flex: 1, background: 'transparent', color: '#888', border: '1px solid #333', padding: '0.75rem', borderRadius: '8px' }}>Cancel</button>
                 <button onClick={handleCreateContact} style={{ flex: 1, background: '#c5a059', color: 'black', border: 'none', padding: '0.75rem', borderRadius: '8px', fontWeight: 'bold' }}>Create</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {isNewPropertyModalOpen && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ background: '#111', border: '1px solid #333', borderRadius: '12px', width: '500px', padding: '2rem' }}>
+            <h2 style={{ marginBottom: '1.5rem', color: '#c5a059' }}>Add New Property</h2>
+            <div style={{ display: 'grid', gap: '1.25rem' }}>
+              <input className="chat-input" value={newProperty.title} onChange={e => setNewProperty({...newProperty, title: e.target.value})} placeholder="Property Title (e.g. Luxury 3BR Villa)" style={{ width: '100%' }} />
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <input className="chat-input" value={newProperty.area} onChange={e => setNewProperty({...newProperty, area: e.target.value})} placeholder="Area (e.g. The Pearl)" style={{ flex: 1 }} />
+                <input className="chat-input" type="number" value={newProperty.price} onChange={e => setNewProperty({...newProperty, price: e.target.value})} placeholder="Price (QAR)" style={{ flex: 1 }} />
+              </div>
+              <select className="chat-input" value={newProperty.type} onChange={e => setNewProperty({...newProperty, type: e.target.value})} style={{ width: '100%', background: '#000', color: 'white' }}>
+                <option value="Apartment">Apartment</option><option value="Villa">Villa</option><option value="Penthouse">Penthouse</option><option value="Townhouse">Townhouse</option>
+              </select>
+              <textarea
+                className="chat-input"
+                value={newProperty.description}
+                onChange={e => setNewProperty({...newProperty, description: e.target.value})}
+                placeholder="Detailed description for AI training..."
+                style={{ width: '100%', height: '100px', resize: 'none' }}
+              />
+              <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+                <button onClick={() => setIsNewPropertyModalOpen(false)} style={{ flex: 1, background: 'transparent', color: '#888', border: '1px solid #333', padding: '0.75rem', borderRadius: '8px' }}>Cancel</button>
+                <button onClick={handleCreateProperty} style={{ flex: 1, background: '#c5a059', color: 'black', border: 'none', padding: '0.75rem', borderRadius: '8px', fontWeight: 'bold' }}>Add Property</button>
               </div>
             </div>
           </div>
