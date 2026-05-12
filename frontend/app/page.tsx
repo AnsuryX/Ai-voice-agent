@@ -610,7 +610,7 @@ export default function DashboardPage() {
       const { data, error } = await supabase
         .from('settings')
         .select('*')
-        .eq('id', 'default_settings')
+        .eq('id', 'default')
         .single();
       
       if (!error && data) {
