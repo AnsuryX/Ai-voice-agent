@@ -46,13 +46,8 @@ export default function DashboardPage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [copyStatus, setCopyStatus] = useState('');
   
-<<<<<<< HEAD
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://qatar-real-estate-bot.vercel.app';
-  const webhookUrl = 'https://qatar-real-estate-bot.vercel.app/webhook';
-=======
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://qatar-real-estate-bot.vercel.app';
   const webhookUrl = `${backendUrl}/webhook`;
->>>>>>> 85d76a84e4e9db523aee8e456bba1a78f728c0dd
   const verifyToken = 'qatar_re_verify_2026';
 
   // Chat state
@@ -153,15 +148,6 @@ export default function DashboardPage() {
   }
 
   async function fetchChatHistory() {
-<<<<<<< HEAD
-    if (!supabase) return;
-    const { data, error } = await supabase
-      .from('chat_history')
-      .select('*')
-      .order('created_at', { ascending: true });
-
-    if (!error) setChatHistory(data || []);
-=======
     try {
       const response = await fetch(`${backendUrl}/api/chat/all`);
       if (response.ok) {
@@ -171,24 +157,14 @@ export default function DashboardPage() {
     } catch (err) {
       console.error('Error fetching chat history:', err);
     }
->>>>>>> 85d76a84e4e9db523aee8e456bba1a78f728c0dd
   }
 
   async function fetchFlows() {
     if (!supabase) return;
     try {
-<<<<<<< HEAD
-      const { data, error } = await supabase
-        .from('flows')
-        .select('*')
-        .order('created_at', { ascending: false });
-      
-      if (error) throw error;
-=======
       const response = await fetch(`${backendUrl}/api/flows`) ;
       if (!response.ok) throw new Error('Failed to fetch flows');
       const data = await response.json();
->>>>>>> 85d76a84e4e9db523aee8e456bba1a78f728c0dd
       setFlows(data || []);
     } catch (err) {
       console.error('Error fetching flows from Supabase:', err);
@@ -208,20 +184,29 @@ export default function DashboardPage() {
   }
 
   const handleCreateContact = async () => {
-    if (!newContact.name || !newContact.sender_id) return;
+    if (!newContact.name || !newContact.sender_id || !supabase) return;
     setLoading(true);
     try {
-      const response = await fetch(`${backendUrl}/api/contacts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newContact),
-      });
-      if (response.ok) {
-        setIsNewContactModalOpen(false);
-        setNewContact({ name: '', sender_id: '', intent: 'Buy' });
-        fetchLeads();
-      }
-    } catch (err) { console.error(err); }
+      const { error } = await supabase
+        .from('leads')
+        .insert([
+          {
+            name: newContact.name,
+            sender_id: newContact.sender_id,
+            intent: newContact.intent,
+            status: 'Contact',
+            created_at: new Date().toISOString()
+          }
+        ]);
+      
+      if (error) throw error;
+
+      setIsNewContactModalOpen(false);
+      setNewContact({ name: '', sender_id: '', intent: 'Buy' });
+      fetchLeads();
+    } catch (err) { 
+      console.error('Error creating contact in Supabase:', err); 
+    }
     setLoading(false);
   };
 
@@ -248,11 +233,7 @@ export default function DashboardPage() {
     setMessageInput('');
 
     try {
-<<<<<<< HEAD
-      const response = await fetch(`${API_URL}/api/send-message`, {
-=======
       const response = await fetch(`${backendUrl}/api/send-message`, {
->>>>>>> 85d76a84e4e9db523aee8e456bba1a78f728c0dd
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -643,17 +624,6 @@ export default function DashboardPage() {
     if (!supabase) return;
     setSavingSettings(true);
     try {
-<<<<<<< HEAD
-      const { error } = await supabase
-        .from('settings')
-        .upsert({ id: 'default_settings', ...settings });
-
-      if (error) throw error;
-
-      setAiSettings(settings);
-      setCopyStatus('Settings saved!');
-      setTimeout(() => setCopyStatus(''), 2000);
-=======
       const response = await fetch(`${backendUrl}/api/settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -664,7 +634,6 @@ export default function DashboardPage() {
         setCopyStatus('Settings saved!');
         setTimeout(() => setCopyStatus(''), 2000);
       }
->>>>>>> 85d76a84e4e9db523aee8e456bba1a78f728c0dd
     } catch (err) {
       console.error('Error saving settings:', err);
     }

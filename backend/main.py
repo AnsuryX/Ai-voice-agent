@@ -49,10 +49,7 @@ booking_manager = None
 rag_manager = None
 google_manager = None
 sentiment_analyzer = None
-<<<<<<< HEAD
 lead_qualifier = None
-=======
->>>>>>> 85d76a84e4e9db523aee8e456bba1a78f728c0dd
 
 class MessageRequest(BaseModel):
     recipient_number: str
@@ -147,15 +144,8 @@ def get_config(key, env=None):
         return getattr(env, key)
     return os.getenv(key)
 
-<<<<<<< HEAD
-def init_services(env=None):
-    global orchestrator, lead_manager, flow_engine, booking_manager, rag_manager, google_manager, sentiment_analyzer, lead_qualifier
-    if orchestrator is None:
-        orchestrator = AIOrchestrator(api_key=get_config("GROQ_API_KEY", env))
-=======
 async def init_services(env=None):
-    global orchestrator, lead_manager, flow_engine, booking_manager, rag_manager, google_manager
->>>>>>> 85d76a84e4e9db523aee8e456bba1a78f728c0dd
+    global orchestrator, lead_manager, flow_engine, booking_manager, rag_manager, google_manager, sentiment_analyzer, lead_qualifier
     if lead_manager is None:
         lead_manager = LeadManager(
             url=get_config("SUPABASE_URL", env),
@@ -176,21 +166,14 @@ async def init_services(env=None):
     if rag_manager is None:
         rag_manager = RAGManager(lead_manager.supabase if lead_manager else None)
     if google_manager is None:
-<<<<<<< HEAD
-        google_manager = GoogleWorkspaceManager()
-    if sentiment_analyzer is None:
-        sentiment_analyzer = SentimentAnalyzer()
-    if lead_qualifier is None:
-        lead_qualifier = LeadQualifier()
-=======
         try:
             google_manager = GoogleWorkspaceManager()
         except Exception as e:
             print(f"Warning: Failed to initialize Google Manager: {e}")
-    global sentiment_analyzer
     if sentiment_analyzer is None:
         sentiment_analyzer = SentimentAnalyzer()
->>>>>>> 85d76a84e4e9db523aee8e456bba1a78f728c0dd
+    if lead_qualifier is None:
+        lead_qualifier = LeadQualifier()
 
 @app.get("/api/keep-alive")
 async def keep_alive(request: Request):
