@@ -290,6 +290,15 @@ async def send_whatsapp_message(
     async with httpx.AsyncClient() as client:
         await client.post(url, headers=headers, json=payload)
 
+@app.get("/debug")
+async def debug(request: Request):
+    return {
+        "path": request.url.path,
+        "method": request.method,
+        "env_vars": list(os.environ.keys()),
+        "status": "active"
+    }
+
 @app.get("/")
 async def root(request: Request):
     env = getattr(request.state, "env", None)
