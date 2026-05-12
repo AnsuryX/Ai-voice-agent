@@ -1,6 +1,7 @@
 import os
 import json
 import httpx
+import time
 import re
 from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, Request, Response, HTTPException
@@ -31,6 +32,7 @@ app.add_middleware(
 from orchestrator import AIOrchestrator
 from database import LeadManager
 from flow_engine import FlowEngine
+from sentiment_analyzer import SentimentAnalyzer
 from booking import BookingManager
 from rag_manager import RAGManager
 from google_manager import GoogleWorkspaceManager
@@ -54,6 +56,9 @@ class MessageRequest(BaseModel):
     message_text: Optional[str] = None
     media_url: Optional[str] = None
     media_type: Optional[str] = "text"
+    template_name: Optional[str] = None
+    language_code: Optional[str] = "en_US"
+    components: Optional[list] = None
 
 
 class SettingsRequest(BaseModel):
@@ -77,6 +82,7 @@ class ContactUpdateRequest(BaseModel):
     intent: Optional[str] = None
     area: Optional[str] = None
     status: Optional[str] = None
+    ai_enabled: Optional[bool] = None
     notes: Optional[str] = None
     tags: Optional[list[str]] = None
     assignee: Optional[str] = None
@@ -92,6 +98,16 @@ class FlowCreateRequest(BaseModel):
     name: str
     nodes: Optional[list] = None
     is_active: Optional[bool] = True
+
+
+class PropertyCreateRequest(BaseModel):
+    title: str
+    area: Optional[str] = None
+    price: Optional[float] = None
+    description: Optional[str] = None
+    bedrooms: Optional[int] = None
+    type: Optional[str] = None
+    images: Optional[list[str]] = None
 
 
 DEFAULT_FLOWS = [
@@ -128,15 +144,21 @@ def get_config(key, env=None):
         return getattr(env, key)
     return os.getenv(key)
 
-def init_services(env=None):
+async def init_services(env=None):
     global orchestrator, lead_manager, flow_engine, booking_manager, rag_manager, google_manager, sentiment_analyzer, lead_qualifier
-    if orchestrator is None:
-        orchestrator = AIOrchestrator(api_key=get_config("GROQ_API_KEY", env))
     if lead_manager is None:
         lead_manager = LeadManager(
             url=get_config("SUPABASE_URL", env),
             key=get_config("SUPABASE_KEY", env)
         )
+
+    if orchestrator is None:
+        orchestrator = AIOrchestrator(api_key=get_config("GROQ_API_KEY", env))
+        if lead_manager and lead_manager.supabase:
+            settings = await lead_manager.get_settings()
+            if settings:
+                orchestrator.provider = settings.get("provider", orchestrator.provider)
+                orchestrator.model = settings.get("model", orchestrator.model)
     if flow_engine is None:
         flow_engine = FlowEngine(lead_manager)
     if booking_manager is None:
@@ -144,7 +166,10 @@ def init_services(env=None):
     if rag_manager is None:
         rag_manager = RAGManager(lead_manager.supabase if lead_manager else None)
     if google_manager is None:
-        google_manager = GoogleWorkspaceManager()
+        try:
+            google_manager = GoogleWorkspaceManager()
+        except Exception as e:
+            print(f"Warning: Failed to initialize Google Manager: {e}")
     if sentiment_analyzer is None:
         sentiment_analyzer = SentimentAnalyzer()
     if lead_qualifier is None:
@@ -154,24 +179,38 @@ def init_services(env=None):
 async def keep_alive(request: Request):
     """Keep Supabase and the service active"""
     env = getattr(request.state, "env", None)
-    init_services(env)
+    await init_services(env)
     if lead_manager and lead_manager.supabase:
         # Simple query to keep Supabase active
         lead_manager.supabase.table("leads").select("count", count="exact").limit(1).execute()
     return {"status": "alive", "timestamp": datetime.now().isoformat()}
 
+@app.get("/api/settings")
+async def get_settings(request: Request):
+    env = getattr(request.state, "env", None)
+    await init_services(env)
+    settings = await lead_manager.get_settings()
+    if settings:
+        return settings
+    return {"provider": orchestrator.provider, "model": orchestrator.model}
+
 @app.post("/api/settings")
 async def update_settings(req: SettingsRequest, request: Request):
     """Update agent settings dynamically"""
     env = getattr(request.state, "env", None)
-    init_services(env)
+    await init_services(env)
+
+    provider = req.provider or orchestrator.provider
+    model = req.model or orchestrator.model
     
-    if req.provider:
-        orchestrator.provider = req.provider
-    if req.model:
-        orchestrator.model = req.model
-    # In a real app, we would save these to a 'settings' table in Supabase
-    return {"status": "updated", "current_provider": orchestrator.provider, "current_model": orchestrator.model}
+    orchestrator.provider = provider
+    orchestrator.model = model
+
+    if lead_manager:
+        await lead_manager.update_settings(provider, model)
+        await lead_manager.log_event("INFO", f"AI Settings updated: {provider} - {model}")
+
+    return {"status": "updated", "current_provider": provider, "current_model": model}
 
 
 def detect_booking_type(user_text: str):
@@ -207,7 +246,16 @@ async def try_create_cal_booking(email: str, booking_type: str):
     )
     return result, None
 
-async def send_whatsapp_message(recipient_number: str, message_text: str = None, media_url: str = None, media_type: str = "text", env=None):
+async def send_whatsapp_message(
+    recipient_number: str,
+    message_text: str = None,
+    media_url: str = None,
+    media_type: str = "text",
+    template_name: str = None,
+    language_code: str = "en_US",
+    components: list = None,
+    env=None
+):
     phone_id = get_config("WHATSAPP_PHONE_ID", env)
     token = get_config("WHATSAPP_TOKEN", env)
     
@@ -222,7 +270,15 @@ async def send_whatsapp_message(recipient_number: str, message_text: str = None,
         "to": recipient_number,
     }
 
-    if media_type == "text" or not media_url:
+    if template_name:
+        payload["type"] = "template"
+        payload["template"] = {
+            "name": template_name,
+            "language": {"code": language_code}
+        }
+        if components:
+            payload["template"]["components"] = components
+    elif media_type == "text" or not media_url:
         payload["type"] = "text"
         payload["text"] = {"body": message_text}
     else:
@@ -235,29 +291,66 @@ async def send_whatsapp_message(recipient_number: str, message_text: str = None,
         await client.post(url, headers=headers, json=payload)
 
 @app.get("/")
-async def root():
-    return {"status": "online", "message": "Qatar Real Estate WhatsApp Bot API"}
+async def root(request: Request):
+    env = getattr(request.state, "env", None)
+    await init_services(env)
+
+    db_status = "Disconnected"
+    try:
+        if lead_manager and lead_manager.supabase:
+            lead_manager.supabase.table("leads").select("count", count="exact").limit(1).execute()
+            db_status = "Connected"
+    except Exception:
+        db_status = "Error"
+
+    ai_status = "Unknown"
+    try:
+        if orchestrator:
+            # Simple check if client is initialized
+            if orchestrator.client:
+                ai_status = f"Ready ({orchestrator.provider})"
+    except Exception:
+        ai_status = "Error"
+
+    return {
+        "status": "online" if db_status == "Connected" else "degraded",
+        "database": db_status,
+        "ai_agent": ai_status,
+        "provider": orchestrator.provider if orchestrator else None,
+        "model": orchestrator.model if orchestrator else None,
+        "timestamp": datetime.now().isoformat(),
+        "message": "Qatar Real Estate WhatsApp Bot API"
+    }
 
 @app.post("/api/send-message")
 async def manual_send_message(req: MessageRequest, request: Request):
     env = getattr(request.state, "env", None)
-    init_services(env)
+    await init_services(env)
     
-    await send_whatsapp_message(
-        recipient_number=req.recipient_number,
-        message_text=req.message_text,
-        media_url=req.media_url,
-        media_type=req.media_type,
-        env=env
-    )
+    try:
+        await send_whatsapp_message(
+            recipient_number=req.recipient_number,
+            message_text=req.message_text,
+            media_url=req.media_url,
+            media_type=req.media_type,
+            template_name=req.template_name,
+            language_code=req.language_code,
+            components=req.components,
+            env=env
+        )
+    except Exception as e:
+        print(f"Warning: Failed to send WhatsApp message: {e}")
     
-    await lead_manager.save_message(
-        sender_id=req.recipient_number,
-        message=req.message_text,
-        role="assistant",
-        media_url=req.media_url,
-        media_type=req.media_type
-    )
+    log_text = req.message_text or f"[Template: {req.template_name}]"
+    if lead_manager:
+        await lead_manager.save_message(
+            sender_id=req.recipient_number,
+            message=log_text,
+            role="assistant",
+            media_url=req.media_url,
+            media_type=req.media_type,
+            metadata={"template": req.template_name} if req.template_name else {}
+        )
     
     return {"status": "sent"}
 
@@ -265,15 +358,25 @@ async def manual_send_message(req: MessageRequest, request: Request):
 @app.get("/api/contacts")
 async def list_contacts(request: Request):
     env = getattr(request.state, "env", None)
-    init_services(env)
+    await init_services(env)
+    if not lead_manager or not lead_manager.supabase:
+        return []
     result = lead_manager.supabase.table("leads").select("*").order("created_at", desc=True).execute()
     return result.data or []
+
+@app.get("/api/chat/{sender_id}")
+async def get_chat_history(sender_id: str, request: Request):
+    env = getattr(request.state, "env", None)
+    await init_services(env)
+    if not lead_manager:
+        return []
+    return await lead_manager.get_chat_history(sender_id)
 
 
 @app.post("/api/contacts")
 async def create_contact(req: ContactRequest, request: Request):
     env = getattr(request.state, "env", None)
-    init_services(env)
+    await init_services(env)
     await lead_manager.update_lead(
         sender_id=req.sender_id,
         name=req.name,
@@ -288,7 +391,7 @@ async def create_contact(req: ContactRequest, request: Request):
 @app.patch("/api/contacts/{sender_id}")
 async def update_contact(sender_id: str, req: ContactUpdateRequest, request: Request):
     env = getattr(request.state, "env", None)
-    init_services(env)
+    await init_services(env)
     existing = await lead_manager.get_lead(sender_id) or {}
     context = existing.get("flow_context") or {}
     if req.notes is not None:
@@ -304,6 +407,7 @@ async def update_contact(sender_id: str, req: ContactUpdateRequest, request: Req
         intent=req.intent,
         area=req.area,
         status=req.status,
+        ai_enabled=req.ai_enabled,
         flow_context=context,
     )
     return {"status": "updated"}
@@ -312,7 +416,7 @@ async def update_contact(sender_id: str, req: ContactUpdateRequest, request: Req
 @app.post("/api/contacts/bulk")
 async def bulk_update_contacts(req: BulkActionRequest, request: Request):
     env = getattr(request.state, "env", None)
-    init_services(env)
+    await init_services(env)
     for sender_id in req.sender_ids:
         lead = await lead_manager.get_lead(sender_id) or {}
         context = lead.get("flow_context") or {}
@@ -333,7 +437,7 @@ async def bulk_update_contacts(req: BulkActionRequest, request: Request):
 @app.get("/api/flows")
 async def list_flows(request: Request):
     env = getattr(request.state, "env", None)
-    init_services(env)
+    await init_services(env)
     try:
         result = lead_manager.supabase.table("flows").select("*").order("created_at", desc=True).execute()
         if not result.data:
@@ -341,14 +445,62 @@ async def list_flows(request: Request):
             result = lead_manager.supabase.table("flows").select("*").order("created_at", desc=True).execute()
         return result.data or []
     except Exception:
-        # Fallback when flows table has not been created yet.
         return (RUNTIME_FLOWS or DEFAULT_FLOWS)
+
+
+@app.get("/api/chat/all")
+async def get_all_chat_history(request: Request):
+    env = getattr(request.state, "env", None)
+    await init_services(env)
+    if not lead_manager or not lead_manager.supabase:
+        return []
+    result = lead_manager.supabase.table("chat_history").select("*").order("created_at", desc=True).limit(200).execute()
+    return result.data or []
+
+
+@app.get("/api/properties")
+async def list_properties(request: Request):
+    env = getattr(request.state, "env", None)
+    await init_services(env)
+    if not lead_manager or not lead_manager.supabase:
+        return []
+    result = lead_manager.supabase.table("properties").select("*").order("created_at", desc=True).execute()
+    return result.data or []
+
+
+@app.post("/api/properties")
+async def create_property(req: PropertyCreateRequest, request: Request):
+    env = getattr(request.state, "env", None)
+    await init_services(env)
+    if not lead_manager or not lead_manager.supabase:
+        raise HTTPException(status_code=500, detail="Database not available")
+
+    # Generate embedding for RAG
+    text_to_embed = f"{req.title} {req.area} {req.description} {req.type}"
+    embedding = await rag_manager.get_embedding(text_to_embed)
+
+    data = req.dict()
+    data["embedding"] = embedding
+
+    result = lead_manager.supabase.table("properties").insert(data).execute()
+    return {"status": "created", "id": result.data[0]["id"] if result.data else None}
+
+
+@app.delete("/api/properties/{prop_id}")
+async def delete_property(prop_id: str, request: Request):
+    env = getattr(request.state, "env", None)
+    await init_services(env)
+    if not lead_manager or not lead_manager.supabase:
+        raise HTTPException(status_code=500, detail="Database not available")
+
+    lead_manager.supabase.table("properties").delete().eq("id", prop_id).execute()
+    return {"status": "deleted"}
 
 
 @app.post("/api/flows")
 async def create_flow(req: FlowCreateRequest, request: Request):
     env = getattr(request.state, "env", None)
-    init_services(env)
+    await init_services(env)
     payload = {
         "id": f"runtime-{len(RUNTIME_FLOWS)+1}",
         "name": req.name,
@@ -381,7 +533,7 @@ async def verify_webhook(request: Request):
 @app.post("/webhook")
 async def handle_webhook(request: Request):
     env = getattr(request.state, "env", None)
-    init_services(env)
+    await init_services(env)
     
     body = await request.json()
     if body.get("object") == "whatsapp_business_account":
@@ -414,7 +566,28 @@ async def handle_webhook(request: Request):
                         lead_data = {"sender_id": sender_id}
 
                     # Save incoming message
-                    await lead_manager.save_message(sender_id, user_text, "user", media_url, media_type)
+                    # Sentiment Analysis
+                    sentiment_score, sentiment_type, needs_human = 0.0, "neutral", False
+                    if user_text:
+                        sentiment_score, sentiment_type, needs_human = sentiment_analyzer.analyze(user_text)
+
+                    # Save incoming message
+                    await lead_manager.save_message(sender_id, user_text, "user", media_url, media_type, sentiment=sentiment_score)
+
+                    # Initialize response variables
+                    response_text = None
+                    cost = 0.0
+                    latency = 0.0
+
+                    # Escalation Check
+                    escalation_keywords = ["manager", "refund", "human", "agent", "supervisor", "complain"]
+                    if user_text and any(kw in user_text.lower() for kw in escalation_keywords):
+                        await lead_manager.update_lead(sender_id, status="Escalated", ai_enabled=False)
+                        await lead_manager.log_event("INFO", f"Lead {sender_id} escalated due to keyword matching.")
+                        response_text = "I've notified our management team to assist you directly. A human agent will reach out shortly."
+                        await lead_manager.save_message(sender_id, response_text, "assistant")
+                        await send_whatsapp_message(sender_id, response_text, env=env)
+                        continue
 
                     # Analyze sentiment
                     sentiment_score, sentiment_type, needs_human = sentiment_analyzer.analyze(user_text or "")
@@ -464,14 +637,22 @@ async def handle_webhook(request: Request):
                             continue
 
                         booking_type = (lead_data.get("flow_context") or {}).get("booking_type", "call")
-                        booking, booking_error = await try_create_cal_booking(email, booking_type)
-                        if booking_error:
-                            response_text = "I captured your request, but booking config is incomplete. Please contact support."
-                        elif booking and booking.get("status") != "error":
-                            response_text = "Done. Your " + booking_type + " has been booked. We will share details shortly."
-                            await lead_manager.update_lead(sender_id, status="Booked", flow_state="", flow_context={})
-                        else:
-                            response_text = "I couldn't finalize booking automatically. Please try again in a moment."
+                        try:
+                            booking, booking_error = await try_create_cal_booking(email, booking_type)
+                            if booking_error:
+                                response_text = "I captured your request, but booking config is incomplete. Please contact support."
+                                await lead_manager.log_event("WARNING", f"Booking error for {sender_id}: {booking_error}")
+                            elif booking and booking.get("status") != "error":
+                                response_text = "Done. Your " + booking_type + " has been booked. We will share details shortly."
+                                await lead_manager.update_lead(sender_id, status="Booked", flow_state="", flow_context={})
+                                await lead_manager.log_event("INFO", f"Booking confirmed for {sender_id}")
+                            else:
+                                response_text = "I couldn't finalize booking automatically. Please try again in a moment."
+                                await lead_manager.log_event("ERROR", "Booking failed", {"booking_response": booking})
+                        except Exception as e:
+                            response_text = "An error occurred while booking. Our team will contact you."
+                            await lead_manager.log_event("ERROR", f"Booking exception: {str(e)}", {"sender_id": sender_id})
+
                         await lead_manager.save_message(sender_id, response_text, "assistant")
                         await send_whatsapp_message(sender_id, response_text, env=env)
                         continue
@@ -480,21 +661,63 @@ async def handle_webhook(request: Request):
                     response_text = await flow_engine.process_message(sender_id, user_text, lead_data)
                     
                     # 2. If no flow, use AI Orchestrator
-                    if not response_text and user_text:
+                    if not response_text and user_text and lead_data.get("ai_enabled", True):
                         # RAG: Search for relevant properties
-                        properties = await rag_manager.search_properties(user_text)
-                        property_context = rag_manager.format_properties_for_prompt(properties)
-                        
+                        try:
+                            properties = await rag_manager.search_properties(user_text)
+                            property_context = rag_manager.format_properties_for_prompt(properties)
+                        except Exception as e:
+                            await lead_manager.log_event("ERROR", f"RAG Search failed: {str(e)}")
+                            property_context = ""
+
                         chat_history = await lead_manager.get_chat_history(sender_id)
-                        response_text = await orchestrator.get_response(
-                            user_text, 
-                            chat_history=chat_history,
-                            lead_data=lead_data,
-                            sentiment_context=property_context
-                        )
-                    
+                        start_time = time.time()
+                        try:
+                            ai_result = await orchestrator.get_response(
+                                user_text,
+                                chat_history=chat_history,
+                                lead_data=lead_data,
+                                sentiment_context=property_context
+                            )
+                        except Exception as e:
+                            await lead_manager.log_event("ERROR", f"AI Response failed: {str(e)}")
+                            ai_result = "I'm having some technical issues. Please wait a moment."
+                        latency = time.time() - start_time
+                        if isinstance(ai_result, dict):
+                            response_text = ai_result.get("response")
+                            cost = ai_result.get("cost", 0.0)
+                        else:
+                            response_text = ai_result
+
                     if response_text:
-                        await lead_manager.save_message(sender_id, response_text, "assistant")
+                        # Calculate health score update
+                        current_health = lead_data.get("health_score", 1.0)
+                        # Agent confusion detection (simple)
+                        confusion_keywords = ["apologize", "sorry", "don't understand", "trouble processing"]
+                        failed_intents = lead_data.get("failed_intents_count", 0)
+                        if response_text and any(kw in response_text.lower() for kw in confusion_keywords):
+                            current_health = max(0.0, current_health - 0.2)
+                            failed_intents += 1
+                            if failed_intents >= 3:
+                                await lead_manager.update_lead(sender_id, status="Escalated", ai_enabled=False)
+                                await lead_manager.log_event("WARNING", f"Lead {sender_id} escalated due to 3x failed intents.")
+                                response_text = "I'm sorry I haven't been able to help as expected. I'm connecting you with a human specialist who can assist better."
+                        else:
+                            failed_intents = 0 # Reset on success
+
+                        # Adjust by sentiment
+                        if sentiment_score < 0:
+                            current_health = max(0.0, current_health - 0.1)
+
+                        total_cost = lead_data.get("total_cost", 0.0) + cost
+
+                        await lead_manager.update_lead(
+                            sender_id,
+                            health_score=current_health,
+                            total_cost=total_cost,
+                            failed_intents_count=failed_intents
+                        )
+                        await lead_manager.save_message(sender_id, response_text, "assistant", latency=latency, cost=cost)
                         await send_whatsapp_message(sender_id, response_text, env=env)
                         
                         # Google Sheets Backup
@@ -511,7 +734,7 @@ class Default(WorkerEntrypoint):
     async def fetch(self, request, env, ctx):
         # Bridge Cloudflare Worker request to FastAPI
         # We store env in request state so our endpoints can access it
-        init_services(env)
+        await init_services(env)
         return await asgi.fetch(app, request, env)
 
 if __name__ == "__main__":
