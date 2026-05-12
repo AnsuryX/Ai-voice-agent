@@ -1,7 +1,20 @@
 {
+  "version": 2,
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/api/(.*)",
+      "destination": "api/index.py"
+    },
+    {
+      "source": "/webhook",
+      "destination": "api/index.py"
+    },
+    {
+      "source": "/debug",
+      "destination": "api/index.py"
+    },
+    {
+      "source": "/",
       "destination": "api/index.py"
     }
   ]
