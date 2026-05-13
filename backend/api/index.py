@@ -373,7 +373,19 @@ async def list_contacts(request: Request):
     result = lead_manager.supabase.table("leads").select("*").order("created_at", desc=True).execute()
     return result.data or []
 
+@app.get("/api/chat/all")
+@app.get("/chat/all")
+async def get_all_chat_history(request: Request):
+    env = getattr(request.state, "env", None)
+    await init_services(env)
+    if not lead_manager or not lead_manager.supabase:
+        return []
+    result = lead_manager.supabase.table("chat_history").select("*").order("created_at", desc=True).limit(200).execute()
+    return result.data or []
+
+
 @app.get("/api/chat/{sender_id}")
+@app.get("/chat/{sender_id}")
 async def get_chat_history(sender_id: str, request: Request):
     env = getattr(request.state, "env", None)
     await init_services(env)
@@ -455,16 +467,6 @@ async def list_flows(request: Request):
         return result.data or []
     except Exception:
         return (RUNTIME_FLOWS or DEFAULT_FLOWS)
-
-
-@app.get("/api/chat/all")
-async def get_all_chat_history(request: Request):
-    env = getattr(request.state, "env", None)
-    await init_services(env)
-    if not lead_manager or not lead_manager.supabase:
-        return []
-    result = lead_manager.supabase.table("chat_history").select("*").order("created_at", desc=True).limit(200).execute()
-    return result.data or []
 
 
 @app.get("/api/properties")

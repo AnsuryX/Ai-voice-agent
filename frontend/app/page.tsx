@@ -611,7 +611,7 @@ export default function DashboardPage() {
         .from('settings')
         .select('*')
         .eq('id', 'default')
-        .single();
+        .maybeSingle();
       
       if (!error && data) {
         setAiSettings({ provider: data.provider, model: data.model });
