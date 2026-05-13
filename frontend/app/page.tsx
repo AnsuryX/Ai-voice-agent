@@ -36,6 +36,7 @@ export default function DashboardPage() {
   const [leads, setLeads] = useState<any[]>([]);
   const [chatHistory, setChatHistory] = useState<any[]>([]);
   const [flows, setFlows] = useState<any[]>([]);
+  const [backendCapabilities, setBackendCapabilities] = useState({ chatAll: true, properties: true });
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedLead, setSelectedLead] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -73,11 +74,15 @@ export default function DashboardPage() {
       console.error('Supabase client not initialized');
       return;
     }
-    
-    fetchLeads();
-    fetchChatHistory();
-    fetchFlows();
-    fetchProperties();
+
+    (async () => {
+      const capabilities = await detectBackendCapabilities();
+      setBackendCapabilities(capabilities);
+      fetchLeads();
+      fetchChatHistory(capabilities);
+      fetchFlows();
+      fetchProperties(capabilities);
+    })();
 
     let leadsSubscription: any = null;
     let chatSubscription: any = null;
@@ -132,6 +137,26 @@ export default function DashboardPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  async function detectBackendCapabilities() {
+    try {
+      const response = await fetch(`${backendUrl}/openapi.json`);
+      if (!response.ok) {
+        return { chatAll: false, properties: false };
+      }
+
+      const schema = await response.json();
+      const paths = schema?.paths || {};
+
+      return {
+        chatAll: Boolean(paths['/api/chat/all'] || paths['/chat/all']),
+        properties: Boolean(paths['/api/properties']),
+      };
+    } catch (err) {
+      console.warn('Failed to detect backend capabilities, using Supabase fallback.');
+      return { chatAll: false, properties: false };
+    }
+  }
+
   async function fetchLeads() {
     if (!supabase) return;
     setLoading(true);
@@ -147,12 +172,27 @@ export default function DashboardPage() {
     setLoading(false);
   }
 
-  async function fetchChatHistory() {
+  async function fetchChatHistory(capabilities = backendCapabilities) {
     try {
-      const response = await fetch(`${backendUrl}/api/chat/all`);
-      if (response.ok) {
-        const data = await response.json();
-        setChatHistory(data || []);
+      if (capabilities.chatAll) {
+        const response = await fetch(`${backendUrl}/api/chat/all`);
+        if (response.ok) {
+          const data = await response.json();
+          setChatHistory(data || []);
+          return;
+        }
+      }
+
+      if (supabase) {
+        const { data, error } = await supabase
+          .from('chat_history')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(200);
+
+        if (!error) {
+          setChatHistory(data || []);
+        }
       }
     } catch (err) {
       console.error('Error fetching chat history:', err);
@@ -171,12 +211,26 @@ export default function DashboardPage() {
     }
   }
 
-  async function fetchProperties() {
+  async function fetchProperties(capabilities = backendCapabilities) {
     try {
-      const response = await fetch(`${backendUrl}/api/properties`);
-      if (response.ok) {
-        const data = await response.json();
-        setProperties(data || []);
+      if (capabilities.properties) {
+        const response = await fetch(`${backendUrl}/api/properties`);
+        if (response.ok) {
+          const data = await response.json();
+          setProperties(data || []);
+          return;
+        }
+      }
+
+      if (supabase) {
+        const { data, error } = await supabase
+          .from('properties')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (!error) {
+          setProperties(data || []);
+        }
       }
     } catch (err) {
       console.error('Error fetching properties:', err);
@@ -497,12 +551,34 @@ export default function DashboardPage() {
     if (!newProperty.title) return;
     setLoading(true);
     try {
-      const response = await fetch(`${backendUrl}/api/properties`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newProperty),
-      });
-      if (response.ok) {
+      let created = false;
+
+      if (backendCapabilities.properties) {
+        const response = await fetch(`${backendUrl}/api/properties`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newProperty),
+        });
+        created = response.ok;
+      }
+
+      if (!created && supabase) {
+        const parsedPrice = newProperty.price ? Number(newProperty.price) : null;
+        const { error } = await supabase.from('properties').insert([
+          {
+            title: newProperty.title,
+            area: newProperty.area || null,
+            price: Number.isFinite(parsedPrice as number) ? parsedPrice : null,
+            description: newProperty.description || null,
+            type: newProperty.type || null,
+          },
+        ]);
+        if (!error) {
+          created = true;
+        }
+      }
+
+      if (created) {
         setIsNewPropertyModalOpen(false);
         setNewProperty({ title: '', area: '', price: '', description: '', type: 'Apartment' });
         fetchProperties();
@@ -537,7 +613,14 @@ export default function DashboardPage() {
               <td>
                 <button
                   onClick={async () => {
-                    await fetch(`${backendUrl}/api/properties/${prop.id}`, { method: 'DELETE' });
+                    if (backendCapabilities.properties) {
+                      const response = await fetch(`${backendUrl}/api/properties/${prop.id}`, { method: 'DELETE' });
+                      if (!response.ok && supabase) {
+                        await supabase.from('properties').delete().eq('id', prop.id);
+                      }
+                    } else if (supabase) {
+                      await supabase.from('properties').delete().eq('id', prop.id);
+                    }
                     fetchProperties();
                   }}
                   style={{ background: 'transparent', color: '#ff4444', border: 'none', cursor: 'pointer', fontSize: '0.8rem' }}
