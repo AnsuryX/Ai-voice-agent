@@ -1,0 +1,25 @@
+[project]
+name = "ai-voice-agent-monorepo-backend-entry"
+version = "0.1.0"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+    "fastapi",
+    "groq",
+    "httpx",
+    "supabase",
+    "python-dotenv",
+    "pydantic",
+    "python-multipart",
+    "openai",
+    "anthropic",
+    "google-api-python-client",
+    "google-auth-httplib2",
+    "google-auth-oauthlib",
+    "uvicorn",
+]
+
+[project.scripts]
+app = "api.index:app"
+
+[tool.vercel]
+entrypoint = "api/index.py"
