@@ -46,6 +46,10 @@ export default function DashboardPage() {
   const [newProperty, setNewProperty] = useState({ title: '', area: '', price: '', description: '', type: 'Apartment' });
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [copyStatus, setCopyStatus] = useState('');
+  const [backendHealth, setBackendHealth] = useState<'online' | 'degraded' | 'offline'>('online');
+  const [lastSyncAt, setLastSyncAt] = useState<string>('');
+  const [enableQuickEmoji, setEnableQuickEmoji] = useState(true);
+  const [enableAttachments, setEnableAttachments] = useState(true);
   
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://qatar-real-estate-bot.vercel.app';
   const webhookUrl = `${backendUrl}/webhook`;
@@ -149,6 +153,18 @@ export default function DashboardPage() {
     return () => clearInterval(timer);
   }, [autoRefresh, backendCapabilities, view]);
 
+  useEffect(() => {
+    if (!activeChatId) return;
+    fetchChatBySender(activeChatId);
+    if (!autoRefresh) return;
+
+    const chatTimer = setInterval(() => {
+      fetchChatBySender(activeChatId);
+    }, 4000);
+
+    return () => clearInterval(chatTimer);
+  }, [activeChatId, autoRefresh]);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -159,15 +175,46 @@ export default function DashboardPage() {
     ));
   };
 
+  const markSynced = () => {
+    setLastSyncAt(new Date().toLocaleTimeString());
+  };
+
+  const replaceMessagesForSender = (senderId: string, rows: any[]) => {
+    const cleaned = normalizeMessages(rows || []);
+    setChatHistory((prev) => {
+      const remaining = prev.filter((m) => m.sender_id !== senderId);
+      return normalizeMessages([...remaining, ...cleaned]);
+    });
+  };
+
+  const appendLocalMessage = (senderId: string, payload: any) => {
+    const now = new Date().toISOString();
+    setChatHistory((prev) => normalizeMessages([
+      ...prev,
+      {
+        id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        sender_id: senderId,
+        role: 'assistant',
+        message: payload.message || null,
+        media_url: payload.media_url || null,
+        media_type: payload.media_type || 'text',
+        created_at: now,
+      }
+    ]));
+  };
+
   async function detectBackendCapabilities() {
     try {
       const response = await fetch(`${backendUrl}/openapi.json`);
       if (!response.ok) {
+        setBackendHealth('degraded');
         return { chatAll: false, properties: false };
       }
 
       const schema = await response.json();
       const paths = schema?.paths || {};
+      setBackendHealth('online');
+      markSynced();
 
       return {
         chatAll: Boolean(paths['/api/chat/all'] || paths['/chat/all']),
@@ -175,9 +222,30 @@ export default function DashboardPage() {
       };
     } catch (err) {
       console.warn('Failed to detect backend capabilities, using Supabase fallback.');
+      setBackendHealth('offline');
       return { chatAll: false, properties: false };
     }
   }
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('dashboard_automation');
+      if (!stored) return;
+      const parsed = JSON.parse(stored);
+      if (typeof parsed.autoRefresh === 'boolean') setAutoRefresh(parsed.autoRefresh);
+      if (typeof parsed.enableQuickEmoji === 'boolean') setEnableQuickEmoji(parsed.enableQuickEmoji);
+      if (typeof parsed.enableAttachments === 'boolean') setEnableAttachments(parsed.enableAttachments);
+    } catch (err) {
+      console.warn('Failed to load automation settings');
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(
+      'dashboard_automation',
+      JSON.stringify({ autoRefresh, enableQuickEmoji, enableAttachments })
+    );
+  }, [autoRefresh, enableQuickEmoji, enableAttachments]);
 
   async function fetchLeads(silent = false) {
     if (!supabase) return;
@@ -187,9 +255,22 @@ export default function DashboardPage() {
       if (response.ok) {
         const data = await response.json();
         setLeads(data || []);
+        setBackendHealth('online');
+        markSynced();
+      } else {
+        throw new Error(`Contacts endpoint failed: ${response.status}`);
       }
     } catch (err) {
-      console.error('Error fetching leads:', err);
+      console.error('Error fetching leads from backend:', err);
+      setBackendHealth('degraded');
+      const { data, error } = await supabase
+        .from('leads')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (!error) {
+        setLeads(data || []);
+        markSynced();
+      }
     }
     if (!silent) setLoading(false);
   }
@@ -201,6 +282,8 @@ export default function DashboardPage() {
         if (response.ok) {
           const data = await response.json();
           setChatHistory(normalizeMessages(data));
+          setBackendHealth('online');
+          markSynced();
           return;
         }
       }
@@ -214,10 +297,43 @@ export default function DashboardPage() {
 
         if (!error) {
           setChatHistory(normalizeMessages(data));
+          setBackendHealth('degraded');
+          markSynced();
         }
       }
     } catch (err) {
       console.error('Error fetching chat history:', err);
+      setBackendHealth('offline');
+    }
+  }
+
+  async function fetchChatBySender(senderId: string) {
+    if (!senderId) return;
+    try {
+      const response = await fetch(`${backendUrl}/api/chat/${encodeURIComponent(senderId)}`);
+      if (response.ok) {
+        const data = await response.json();
+        replaceMessagesForSender(senderId, data || []);
+        setBackendHealth('online');
+        markSynced();
+        return;
+      }
+    } catch (err) {
+      console.error('Error fetching sender chat from backend:', err);
+    }
+
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('chat_history')
+        .select('*')
+        .eq('sender_id', senderId)
+        .order('created_at', { ascending: true })
+        .limit(300);
+      if (!error) {
+        replaceMessagesForSender(senderId, data || []);
+        setBackendHealth('degraded');
+        markSynced();
+      }
     }
   }
 
@@ -240,6 +356,8 @@ export default function DashboardPage() {
         if (response.ok) {
           const data = await response.json();
           setProperties(data || []);
+          setBackendHealth('online');
+          markSynced();
           return;
         }
       }
@@ -247,17 +365,20 @@ export default function DashboardPage() {
       if (supabase) {
         const { data, error } = await supabase
           .from('properties')
-          .select('*')
+          .select('id,title,area,price,description,bedrooms,type,images,created_at')
           .order('created_at', { ascending: false });
 
         if (!error) {
           setProperties(data || []);
+          setBackendHealth('degraded');
+          markSynced();
         } else {
           setError(`Failed to load properties: ${error.message}`);
         }
       }
     } catch (err) {
       console.error('Error fetching properties:', err);
+      setBackendHealth('offline');
     }
   }
 
@@ -307,15 +428,20 @@ export default function DashboardPage() {
   const handleSendMessage = async () => {
     if (!activeChatId) return;
 
-    const textMessage = messageInput.trim();
-    if (!textMessage && !selectedFile) return;
+    const textMessage = messageInput;
+    const normalizedText = textMessage.trim().length > 0 ? textMessage : '';
+    if (!normalizedText && !selectedFile) return;
 
     if (selectedFile) {
+      if (!enableAttachments) {
+        setError('Attachments are disabled in Automation Features.');
+        return;
+      }
       setSendingAttachment(true);
       try {
         const formData = new FormData();
         formData.append('recipient_number', activeChatId);
-        formData.append('caption', textMessage);
+        formData.append('caption', normalizedText);
         formData.append('file', selectedFile);
 
         const response = await fetch(`${backendUrl}/api/send-media`, {
@@ -324,11 +450,23 @@ export default function DashboardPage() {
         });
 
         if (!response.ok) {
-          throw new Error('Media endpoint unavailable. Redeploy backend to enable file sending.');
+          const detail = await response.text();
+          throw new Error(`Media send failed: ${detail}`);
         }
 
+        appendLocalMessage(activeChatId, {
+          message: textMessage || `[${selectedFile.type || 'document'}]`,
+          media_type: selectedFile.type.startsWith('image/')
+            ? 'image'
+            : selectedFile.type.startsWith('video/')
+              ? 'video'
+              : selectedFile.type.startsWith('audio/')
+                ? 'audio'
+                : 'document',
+        });
         setSelectedFile(null);
         setMessageInput('');
+        markSynced();
         return;
       } catch (err: any) {
         setError(err?.message || 'Error sending file. Please try again.');
@@ -338,12 +476,12 @@ export default function DashboardPage() {
       }
     }
 
-    if (!textMessage) {
+    if (!normalizedText) {
       setMessageInput('');
       return;
     }
 
-    const message = textMessage;
+    const message = normalizedText;
     setMessageInput('');
 
     try {
@@ -358,6 +496,8 @@ export default function DashboardPage() {
       if (!response.ok) {
         throw new Error('Failed to send message');
       }
+      appendLocalMessage(activeChatId, { message, media_type: 'text' });
+      markSynced();
     } catch (err) {
       setError('Error sending message. Please try again.');
     }
@@ -496,6 +636,9 @@ export default function DashboardPage() {
                 <button
                   onClick={async () => {
                         const newState = activeLead?.ai_enabled === false;
+                        setLeads((prev) => prev.map((lead) => (
+                          lead.sender_id === activeChatId ? { ...lead, ai_enabled: newState } : lead
+                        )));
                         try {
                           const response = await fetch(`${backendUrl}/api/contacts/${activeChatId}`, {
                             method: 'PATCH',
@@ -510,8 +653,7 @@ export default function DashboardPage() {
                           if (supabase) {
                             const { error } = await supabase
                               .from('leads')
-                              .update({ ai_enabled: newState })
-                              .eq('sender_id', activeChatId);
+                              .upsert([{ sender_id: activeChatId, ai_enabled: newState, last_seen: new Date().toISOString() }], { onConflict: 'sender_id' });
 
                             if (error) {
                               setError(`Failed to update AI toggle: ${error.message}`);
@@ -520,6 +662,7 @@ export default function DashboardPage() {
                           }
                         }
                         fetchLeads(true);
+                        markSynced();
                       }}
                       style={{
                         width: '36px',
@@ -577,9 +720,22 @@ export default function DashboardPage() {
               </div>
 
               <div className="chat-input-area">
-                <button className="icon-button"><Smile size={22} /></button>
                 <button
                   className="icon-button"
+                  title="Insert emoji"
+                  onClick={() => {
+                    if (!enableQuickEmoji) {
+                      setError('Emoji quick insert is disabled in Automation Features.');
+                      return;
+                    }
+                    setMessageInput((prev) => `${prev}😊`);
+                  }}
+                >
+                  <Smile size={22} />
+                </button>
+                <button
+                  className="icon-button"
+                  disabled={!enableAttachments}
                   onClick={() => fileInputRef.current?.click()}
                   title="Attach file"
                 >
@@ -600,7 +756,7 @@ export default function DashboardPage() {
                   placeholder={selectedFile ? `File selected: ${selectedFile.name}` : 'Type a message...'}
                   value={messageInput}
                   onChange={(e) => setMessageInput(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
                 />
                 <button 
                   className="icon-button" 
@@ -673,16 +829,7 @@ export default function DashboardPage() {
 
       let created = false;
 
-      if (backendCapabilities.properties) {
-        const response = await fetch(`${backendUrl}/api/properties`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        created = response.ok;
-      }
-
-      if (!created && supabase) {
+      if (supabase) {
         const { error } = await supabase.from('properties').insert([
           {
             id: crypto.randomUUID(),
@@ -699,8 +846,26 @@ export default function DashboardPage() {
         ]);
         if (!error) {
           created = true;
+          setBackendHealth('degraded');
+          markSynced();
         } else {
-          setError(`Could not create property: ${error.message}`);
+          console.error('Supabase property insert failed:', error.message);
+        }
+      }
+
+      if (!created && backendCapabilities.properties) {
+        const response = await fetch(`${backendUrl}/api/properties`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (response.ok) {
+          created = true;
+          setBackendHealth('online');
+          markSynced();
+        } else {
+          const detail = await response.text();
+          setError(`Could not create property: ${detail}`);
         }
       }
 
@@ -741,13 +906,15 @@ export default function DashboardPage() {
               <td>
                 <button
                   onClick={async () => {
-                    if (backendCapabilities.properties) {
-                      const response = await fetch(`${backendUrl}/api/properties/${prop.id}`, { method: 'DELETE' });
-                      if (!response.ok && supabase) {
-                        await supabase.from('properties').delete().eq('id', prop.id);
+                    if (supabase) {
+                      const { error } = await supabase.from('properties').delete().eq('id', prop.id);
+                      if (!error) {
+                        fetchProperties();
+                        return;
                       }
-                    } else if (supabase) {
-                      await supabase.from('properties').delete().eq('id', prop.id);
+                    }
+                    if (backendCapabilities.properties) {
+                      await fetch(`${backendUrl}/api/properties/${prop.id}`, { method: 'DELETE' });
                     }
                     fetchProperties();
                   }}
@@ -858,6 +1025,8 @@ export default function DashboardPage() {
       const res = await fetch(`${backendUrl}/`);
       const data = await res.json();
       const latency = Date.now() - startTime;
+      setBackendHealth(data.status === 'online' ? 'online' : 'degraded');
+      markSynced();
       setHealthStatus({
         status: data.status === 'online' ? 'Healthy' : 'Degraded',
         latency: `${latency}ms`,
@@ -867,6 +1036,7 @@ export default function DashboardPage() {
         timestamp: new Date(data.timestamp).toLocaleTimeString()
       });
     } catch (err) {
+      setBackendHealth('offline');
       setHealthStatus({ status: 'Offline', backend: 'Error', database: 'Disconnected', ai_agent: 'Offline', timestamp: new Date().toLocaleTimeString() });
     }
     setCheckingHealth(false);
@@ -878,6 +1048,9 @@ export default function DashboardPage() {
         <div>
           <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Agent Settings</h3>
           <p style={{ color: '#888' }}>Configure your WhatsApp integration and automation rules.</p>
+          <p style={{ color: backendHealth === 'online' ? '#4ade80' : backendHealth === 'degraded' ? '#facc15' : '#f87171', marginTop: '0.35rem', fontSize: '0.8rem' }}>
+            Backend: {backendHealth.toUpperCase()} {lastSyncAt ? `• Last sync ${lastSyncAt}` : ''}
+          </p>
         </div>
         <button 
           onClick={checkHealth}
@@ -957,16 +1130,58 @@ export default function DashboardPage() {
           <h4 style={{ marginBottom: '1rem', color: '#c5a059' }}>Automation Features</h4>
           <div style={{ display: 'grid', gap: '1rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>AI Auto-Reply (GPT-4o)</span>
-              <button style={{ background: '#4ade80', border: 'none', padding: '4px 12px', borderRadius: '12px', fontSize: '0.7rem', color: 'black', fontWeight: 'bold' }}>Enabled</button>
+              <span>Live Auto Refresh</span>
+              <button
+                onClick={() => setAutoRefresh((prev) => !prev)}
+                style={{
+                  background: autoRefresh ? '#4ade80' : '#3f3f46',
+                  border: 'none',
+                  padding: '4px 12px',
+                  borderRadius: '12px',
+                  fontSize: '0.7rem',
+                  color: autoRefresh ? 'black' : 'white',
+                  fontWeight: 'bold'
+                }}
+              >
+                {autoRefresh ? 'Enabled' : 'Disabled'}
+              </button>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>Lead Qualification Flow</span>
-              <button style={{ background: '#4ade80', border: 'none', padding: '4px 12px', borderRadius: '12px', fontSize: '0.7rem', color: 'black', fontWeight: 'bold' }}>Active</button>
+              <span>Quick Emoji Insert</span>
+              <button
+                onClick={() => setEnableQuickEmoji((prev) => !prev)}
+                style={{
+                  background: enableQuickEmoji ? '#4ade80' : '#3f3f46',
+                  border: 'none',
+                  padding: '4px 12px',
+                  borderRadius: '12px',
+                  fontSize: '0.7rem',
+                  color: enableQuickEmoji ? 'black' : 'white',
+                  fontWeight: 'bold'
+                }}
+              >
+                {enableQuickEmoji ? 'Enabled' : 'Disabled'}
+              </button>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>Multimedia Handling</span>
-              <button style={{ background: '#4ade80', border: 'none', padding: '4px 12px', borderRadius: '12px', fontSize: '0.7rem', color: 'black', fontWeight: 'bold' }}>Active</button>
+              <span>File Attachments</span>
+              <button
+                onClick={() => setEnableAttachments((prev) => !prev)}
+                style={{
+                  background: enableAttachments ? '#4ade80' : '#3f3f46',
+                  border: 'none',
+                  padding: '4px 12px',
+                  borderRadius: '12px',
+                  fontSize: '0.7rem',
+                  color: enableAttachments ? 'black' : 'white',
+                  fontWeight: 'bold'
+                }}
+              >
+                {enableAttachments ? 'Enabled' : 'Disabled'}
+              </button>
+            </div>
+            <div style={{ fontSize: '0.78rem', color: '#888' }}>
+              Tip: click the smile icon in chat to quickly insert emoji.
             </div>
           </div>
         </div>

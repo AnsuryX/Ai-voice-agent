@@ -570,7 +570,12 @@ async def list_properties(request: Request):
     await init_services(env)
     if not lead_manager or not lead_manager.supabase:
         return []
-    result = lead_manager.supabase.table("properties").select("*").order("created_at", desc=True).execute()
+    result = (
+        lead_manager.supabase.table("properties")
+        .select("id,title,area,price,description,bedrooms,type,images,created_at")
+        .order("created_at", desc=True)
+        .execute()
+    )
     return result.data or []
 
 
@@ -581,14 +586,22 @@ async def create_property(req: PropertyCreateRequest, request: Request):
     if not lead_manager or not lead_manager.supabase:
         raise HTTPException(status_code=500, detail="Database not available")
 
-    # Generate embedding for RAG
-    text_to_embed = f"{req.title} {req.area} {req.description} {req.type}"
-    embedding = await rag_manager.get_embedding(text_to_embed)
-
     data = req.dict()
-    data["embedding"] = embedding
+    try:
+        # Generate embedding for RAG when configured, but don't block property creation on embedding errors.
+        text_to_embed = f"{req.title} {req.area} {req.description} {req.type}"
+        embedding = await rag_manager.get_embedding(text_to_embed)
+        data["embedding"] = embedding
+    except Exception as e:
+        data["embedding"] = None
+        if lead_manager:
+            await lead_manager.log_event("WARNING", "Property embedding failed; creating property without embedding.", {"error": str(e)})
 
-    result = lead_manager.supabase.table("properties").insert(data).execute()
+    try:
+        result = lead_manager.supabase.table("properties").insert(data).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create property: {str(e)}")
+
     return {"status": "created", "id": result.data[0]["id"] if result.data else None}
 
 
