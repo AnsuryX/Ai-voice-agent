@@ -57,7 +57,10 @@ export default function DashboardPage() {
   const [newContact, setNewContact] = useState({ name: "", sender_id: "", intent: "Buy" });
   const [isTemplateMenuOpen, setIsTemplateMenuOpen] = useState(false);
   const [messageInput, setMessageInput] = useState('');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [sendingAttachment, setSendingAttachment] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function copyToClipboard(text: string, label: string) {
     try {
@@ -93,7 +96,7 @@ export default function DashboardPage() {
         .channel('leads-channel')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, (payload) => {
           console.log('Leads updated:', payload);
-          fetchLeads();
+          fetchLeads(true);
         })
         .subscribe((status) => {
           console.log('Leads subscription status:', status);
@@ -103,7 +106,7 @@ export default function DashboardPage() {
         .channel('chat-channel')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_history' }, (payload) => {
           console.log('Chat history updated:', payload);
-          fetchChatHistory();
+          fetchChatHistory(backendCapabilities);
         })
         .subscribe((status) => {
           console.log('Chat subscription status:', status);
@@ -133,8 +136,27 @@ export default function DashboardPage() {
     scrollToBottom();
   }, [chatHistory, activeChatId]);
 
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const timer = setInterval(() => {
+      fetchLeads(true);
+      fetchChatHistory(backendCapabilities);
+      if (view === 'Properties') {
+        fetchProperties(backendCapabilities);
+      }
+    }, 8000);
+
+    return () => clearInterval(timer);
+  }, [autoRefresh, backendCapabilities, view]);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const normalizeMessages = (rows: any[]) => {
+    return [...(rows || [])].sort((a, b) => (
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    ));
   };
 
   async function detectBackendCapabilities() {
@@ -157,9 +179,9 @@ export default function DashboardPage() {
     }
   }
 
-  async function fetchLeads() {
+  async function fetchLeads(silent = false) {
     if (!supabase) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     try {
       const response = await fetch(`${backendUrl}/api/contacts`);
       if (response.ok) {
@@ -169,7 +191,7 @@ export default function DashboardPage() {
     } catch (err) {
       console.error('Error fetching leads:', err);
     }
-    setLoading(false);
+    if (!silent) setLoading(false);
   }
 
   async function fetchChatHistory(capabilities = backendCapabilities) {
@@ -178,7 +200,7 @@ export default function DashboardPage() {
         const response = await fetch(`${backendUrl}/api/chat/all`);
         if (response.ok) {
           const data = await response.json();
-          setChatHistory(data || []);
+          setChatHistory(normalizeMessages(data));
           return;
         }
       }
@@ -191,7 +213,7 @@ export default function DashboardPage() {
           .limit(200);
 
         if (!error) {
-          setChatHistory(data || []);
+          setChatHistory(normalizeMessages(data));
         }
       }
     } catch (err) {
@@ -230,6 +252,8 @@ export default function DashboardPage() {
 
         if (!error) {
           setProperties(data || []);
+        } else {
+          setError(`Failed to load properties: ${error.message}`);
         }
       }
     } catch (err) {
@@ -281,9 +305,45 @@ export default function DashboardPage() {
   };
 
   const handleSendMessage = async () => {
-    if (!messageInput.trim() || !activeChatId) return;
+    if (!activeChatId) return;
 
-    const message = messageInput;
+    const textMessage = messageInput.trim();
+    if (!textMessage && !selectedFile) return;
+
+    if (selectedFile) {
+      setSendingAttachment(true);
+      try {
+        const formData = new FormData();
+        formData.append('recipient_number', activeChatId);
+        formData.append('caption', textMessage);
+        formData.append('file', selectedFile);
+
+        const response = await fetch(`${backendUrl}/api/send-media`, {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          throw new Error('Media endpoint unavailable. Redeploy backend to enable file sending.');
+        }
+
+        setSelectedFile(null);
+        setMessageInput('');
+        return;
+      } catch (err: any) {
+        setError(err?.message || 'Error sending file. Please try again.');
+        return;
+      } finally {
+        setSendingAttachment(false);
+      }
+    }
+
+    if (!textMessage) {
+      setMessageInput('');
+      return;
+    }
+
+    const message = textMessage;
     setMessageInput('');
 
     try {
@@ -312,7 +372,7 @@ export default function DashboardPage() {
     
     // Add all leads as conversations
     leads.forEach(lead => {
-      const lastMsg = chatHistory.filter(m => m.sender_id === lead.sender_id).pop();
+      const lastMsg = chatHistory.filter(m => m.sender_id === lead.sender_id).at(-1);
       map.set(lead.sender_id, {
         ...lead,
         lastMessage: lastMsg?.message || (lastMsg?.media_type !== 'text' ? `[${lastMsg?.media_type}]` : 'No messages'),
@@ -433,15 +493,33 @@ export default function DashboardPage() {
                     <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: activeLead?.ai_enabled !== false ? '#4ade80' : '#888' }}>
                       {activeLead?.ai_enabled !== false ? 'AI ON' : 'AI OFF'}
                     </span>
-                    <button
-                      onClick={async () => {
+                <button
+                  onClick={async () => {
                         const newState = activeLead?.ai_enabled === false;
-                        await fetch(`${backendUrl}/api/contacts/${activeChatId}`, {
-                          method: 'PATCH',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ ai_enabled: newState }),
-                        });
-                        fetchLeads();
+                        try {
+                          const response = await fetch(`${backendUrl}/api/contacts/${activeChatId}`, {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ ai_enabled: newState }),
+                          });
+
+                          if (!response.ok) {
+                            throw new Error('Backend update failed');
+                          }
+                        } catch (err) {
+                          if (supabase) {
+                            const { error } = await supabase
+                              .from('leads')
+                              .update({ ai_enabled: newState })
+                              .eq('sender_id', activeChatId);
+
+                            if (error) {
+                              setError(`Failed to update AI toggle: ${error.message}`);
+                              return;
+                            }
+                          }
+                        }
+                        fetchLeads(true);
                       }}
                       style={{
                         width: '36px',
@@ -477,7 +555,19 @@ export default function DashboardPage() {
                     {msg.media_url && msg.media_type === 'image' && (
                       <img src={msg.media_url} alt="Media" className="media-preview" />
                     )}
+                    {msg.media_url && msg.media_type === 'video' && (
+                      <video src={msg.media_url} controls className="media-preview" />
+                    )}
+                    {msg.media_url && msg.media_type === 'audio' && (
+                      <audio src={msg.media_url} controls />
+                    )}
+                    {msg.media_url && msg.media_type === 'document' && (
+                      <a href={msg.media_url} target="_blank" rel="noreferrer">Open document</a>
+                    )}
                     {msg.message && <div>{msg.message}</div>}
+                    {!msg.message && msg.media_type && msg.media_type !== 'text' && !msg.media_url && (
+                      <div>[{msg.media_type}]</div>
+                    )}
                     <div className="message-time">
                       {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </div>
@@ -488,10 +578,26 @@ export default function DashboardPage() {
 
               <div className="chat-input-area">
                 <button className="icon-button"><Smile size={22} /></button>
-                <button className="icon-button"><Paperclip size={22} /></button>
+                <button
+                  className="icon-button"
+                  onClick={() => fileInputRef.current?.click()}
+                  title="Attach file"
+                >
+                  <Paperclip size={22} />
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt,.xlsx,.xls,.ppt,.pptx"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] || null;
+                    setSelectedFile(file);
+                  }}
+                />
                 <input 
                   className="chat-input" 
-                  placeholder="Type a message..." 
+                  placeholder={selectedFile ? `File selected: ${selectedFile.name}` : 'Type a message...'}
                   value={messageInput}
                   onChange={(e) => setMessageInput(e.target.value)}
                   onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
@@ -499,9 +605,10 @@ export default function DashboardPage() {
                 <button 
                   className="icon-button" 
                   style={{ color: '#c5a059' }}
+                  disabled={sendingAttachment}
                   onClick={handleSendMessage}
                 >
-                  <Send size={22} />
+                  {sendingAttachment ? '...' : <Send size={22} />}
                 </button>
               </div>
             </>
@@ -550,31 +657,50 @@ export default function DashboardPage() {
   const handleCreateProperty = async () => {
     if (!newProperty.title) return;
     setLoading(true);
+    setError('');
     try {
+      const parsedPriceRaw = (newProperty.price || '').toString().replace(/,/g, '').trim();
+      const parsedPrice = parsedPriceRaw ? Number(parsedPriceRaw) : null;
+      const payload = {
+        title: newProperty.title.trim(),
+        area: newProperty.area?.trim() || null,
+        price: Number.isFinite(parsedPrice as number) ? parsedPrice : null,
+        description: newProperty.description?.trim() || null,
+        type: newProperty.type || null,
+        bedrooms: null as number | null,
+        images: [] as string[],
+      };
+
       let created = false;
 
       if (backendCapabilities.properties) {
         const response = await fetch(`${backendUrl}/api/properties`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newProperty),
+          body: JSON.stringify(payload),
         });
         created = response.ok;
       }
 
       if (!created && supabase) {
-        const parsedPrice = newProperty.price ? Number(newProperty.price) : null;
         const { error } = await supabase.from('properties').insert([
           {
-            title: newProperty.title,
-            area: newProperty.area || null,
+            id: crypto.randomUUID(),
+            title: payload.title,
+            area: payload.area,
             price: Number.isFinite(parsedPrice as number) ? parsedPrice : null,
-            description: newProperty.description || null,
-            type: newProperty.type || null,
+            description: payload.description,
+            type: payload.type,
+            bedrooms: payload.bedrooms,
+            images: payload.images,
+            metadata: { source: 'dashboard' },
+            created_at: new Date().toISOString(),
           },
         ]);
         if (!error) {
           created = true;
+        } else {
+          setError(`Could not create property: ${error.message}`);
         }
       }
 
@@ -582,6 +708,8 @@ export default function DashboardPage() {
         setIsNewPropertyModalOpen(false);
         setNewProperty({ title: '', area: '', price: '', description: '', type: 'Apartment' });
         fetchProperties();
+      } else {
+        setError('Could not create property. Check backend/Supabase policies and try again.');
       }
     } catch (err) { console.error(err); }
     setLoading(false);

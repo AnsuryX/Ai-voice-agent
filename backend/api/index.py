@@ -4,7 +4,7 @@ import httpx
 import time
 import re
 from datetime import datetime, timedelta, timezone
-from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi import FastAPI, Request, Response, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
@@ -251,6 +251,8 @@ async def send_whatsapp_message(
     message_text: str = None,
     media_url: str = None,
     media_type: str = "text",
+    media_id: str = None,
+    document_filename: str = None,
     template_name: str = None,
     language_code: str = "en_US",
     components: list = None,
@@ -278,6 +280,14 @@ async def send_whatsapp_message(
         }
         if components:
             payload["template"]["components"] = components
+    elif media_id:
+        send_type = media_type if media_type in ["image", "video", "audio", "document"] else "document"
+        payload["type"] = send_type
+        payload[send_type] = {"id": media_id}
+        if message_text and send_type in ["image", "video", "document"]:
+            payload[send_type]["caption"] = message_text
+        if send_type == "document" and document_filename:
+            payload[send_type]["filename"] = document_filename
     elif media_type == "text" or not media_url:
         payload["type"] = "text"
         payload["text"] = {"body": message_text}
@@ -289,6 +299,60 @@ async def send_whatsapp_message(
 
     async with httpx.AsyncClient() as client:
         await client.post(url, headers=headers, json=payload)
+
+
+def detect_media_type(file: UploadFile, requested_type: str = None):
+    if requested_type in ["image", "video", "audio", "document"]:
+        return requested_type
+
+    content_type = (file.content_type or "").lower()
+    filename = (file.filename or "").lower()
+
+    if content_type.startswith("image/"):
+        return "image"
+    if content_type.startswith("video/"):
+        return "video"
+    if content_type.startswith("audio/"):
+        return "audio"
+    if content_type.startswith("application/") or filename.endswith((".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt")):
+        return "document"
+    return "document"
+
+
+async def upload_whatsapp_media(file: UploadFile, env=None):
+    phone_id = get_config("WHATSAPP_PHONE_ID", env)
+    token = get_config("WHATSAPP_TOKEN", env)
+    if not phone_id or not token:
+        raise HTTPException(status_code=500, detail="WhatsApp credentials missing")
+
+    upload_url = f"https://graph.facebook.com/v21.0/{phone_id}/media"
+    headers = {
+        "Authorization": f"Bearer {token}",
+    }
+
+    file_bytes = await file.read()
+    files = {
+        "file": (
+            file.filename or "upload.bin",
+            file_bytes,
+            file.content_type or "application/octet-stream",
+        )
+    }
+    data = {
+        "messaging_product": "whatsapp",
+        "type": file.content_type or "application/octet-stream",
+    }
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(upload_url, headers=headers, data=data, files=files)
+        if response.status_code >= 400:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+        payload = response.json()
+
+    media_id = payload.get("id")
+    if not media_id:
+        raise HTTPException(status_code=500, detail="Media upload failed")
+    return media_id
 
 @app.get("/debug")
 async def debug(request: Request):
@@ -362,6 +426,46 @@ async def manual_send_message(req: MessageRequest, request: Request):
         )
     
     return {"status": "sent"}
+
+
+@app.post("/api/send-media")
+async def manual_send_media(
+    request: Request,
+    recipient_number: str = Form(...),
+    file: UploadFile = File(...),
+    caption: str = Form(None),
+    media_type: str = Form(None),
+):
+    env = getattr(request.state, "env", None)
+    await init_services(env)
+
+    resolved_type = detect_media_type(file, media_type)
+    media_id = await upload_whatsapp_media(file, env=env)
+
+    await send_whatsapp_message(
+        recipient_number=recipient_number,
+        message_text=caption,
+        media_type=resolved_type,
+        media_id=media_id,
+        document_filename=file.filename,
+        env=env,
+    )
+
+    if lead_manager:
+        await lead_manager.save_message(
+            sender_id=recipient_number,
+            message=caption,
+            role="assistant",
+            media_url=None,
+            media_type=resolved_type,
+            metadata={
+                "media_id": media_id,
+                "filename": file.filename,
+                "content_type": file.content_type,
+            },
+        )
+
+    return {"status": "sent", "media_type": resolved_type}
 
 
 @app.get("/api/contacts")
